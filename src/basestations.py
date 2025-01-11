@@ -46,7 +46,7 @@ class BaseStationType(Enum):
         transmit_antenna_gain=25,  # in dBi
         receive_antenna_gain=25,  # in dBi
         antenna_gain_to_noise_temperature=1.5,  # in dB
-        pathloss_exponent=2.0,  # dimensionless
+        pathloss_exponent=3.2,  # dimensionless
         eavesdropper_density=1 / 1e5,  # in km^-2
     )
     GROUND = BaseStationConfig(
@@ -56,7 +56,7 @@ class BaseStationType(Enum):
         transmit_antenna_gain=25,  # in dBi
         receive_antenna_gain=25,  # in dBi
         antenna_gain_to_noise_temperature=1.5,  # in dB
-        pathloss_exponent=2.8,  # dimensionless
+        pathloss_exponent=3.7,  # dimensionless
         eavesdropper_density=1 / 9e2,  # in km^-2
     )
     AIR = BaseStationConfig(
@@ -66,7 +66,7 @@ class BaseStationType(Enum):
         transmit_antenna_gain=25,  # in dBi
         receive_antenna_gain=25,  # in dBi
         antenna_gain_to_noise_temperature=1.5,  # in dB
-        pathloss_exponent=2.0,  # dimensionless
+        pathloss_exponent=2.7,  # dimensionless
         eavesdropper_density=1 / 2.5e3,  # in km^-2
     )
     SPACE = BaseStationConfig(
@@ -76,7 +76,7 @@ class BaseStationType(Enum):
         transmit_antenna_gain=38.5,  # in dBi
         receive_antenna_gain=38.5,  # in dBi
         antenna_gain_to_noise_temperature=13,  # in dB
-        pathloss_exponent=2,  # dimensionless
+        pathloss_exponent=2.2,  # dimensionless
         eavesdropper_density=1 / 1e4,  # in km^-2
     )
 
