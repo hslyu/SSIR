@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import math
 from abc import ABC
 from dataclasses import dataclass
 from enum import Enum
@@ -12,7 +13,11 @@ from numpy.typing import NDArray
 @dataclass
 class EnvironmentalVariables:
     noise_power_density: float = -174
-    SPSC_probability: float = 0.99
+    SPSC_probability: float = 0.999
+    maritime_basestations_altitude: float = 0.0
+    ground_basestations_altitude: float = 0.25
+    haps_basestations_altitude: float = 22
+    leo_basestations_altitude: float = 500
 
 
 environmental_variables = EnvironmentalVariables()
@@ -39,7 +44,7 @@ class BaseStationConfig:
 
 
 class BaseStationType(Enum):
-    SEA = BaseStationConfig(
+    MARITIME = BaseStationConfig(
         power_capacity=30,  # in dBm
         carrier_frequency=14,  # in GHz
         bandwidth=250,  # in MHz
@@ -59,7 +64,7 @@ class BaseStationType(Enum):
         pathloss_exponent=3.7,  # dimensionless
         eavesdropper_density=1 / 9e2,  # in km^-2
     )
-    AIR = BaseStationConfig(
+    HAPS = BaseStationConfig(
         power_capacity=30,  # in dBm
         carrier_frequency=14,  # in GHz
         bandwidth=250,  # in MHz
@@ -69,7 +74,7 @@ class BaseStationType(Enum):
         pathloss_exponent=2.7,  # dimensionless
         eavesdropper_density=1 / 2.5e3,  # in km^-2
     )
-    SPACE = BaseStationConfig(
+    LEO = BaseStationConfig(
         power_capacity=21.5,  # in dBm
         carrier_frequency=20,  # in GHz
         bandwidth=400,  # in MHz
@@ -81,24 +86,63 @@ class BaseStationType(Enum):
     )
 
     @property
-    def config(self) -> BaseStationConfig:
+    def config(self, node=Optional["BaseStationType"]) -> BaseStationConfig:
         """Returns the configuration for the base station type."""
         return self.value
 
-    def _repr(self):
+    def __repr__(self):
         return f"BaseStationType({self.name})"
 
 
 class AbstractNode(ABC):
     """An abstract node class."""
 
-    _node_id: int
-    _position: NDArray
-    _parent: Optional["AbstractNode"]
-    _childeren: List["AbstractNode"]
+    def __init__(self, node_id: int, position: NDArray, isGeographic: bool = True):
+        self._node_id = node_id
+        self._position = position
+        self._parent: Optional[AbstractNode] = None
+        self._childeren: List[AbstractNode] = []
+        self._isGeographic = isGeographic
 
     def get_position(self) -> NDArray:
         return self._position
+
+    def get_distance(self, node: "AbstractNode"):
+        """
+        Calculate the distance between this node and another node.
+
+        Returns:
+            Distance in kilometers if _isGeographic is True,
+            otherwise in local metric units.
+        """
+        if self._isGeographic:
+            lat1, lon1, alt1 = self.get_position()
+            lat2, lon2, alt2 = node.get_position()
+
+            # Convert latitude and longitude from degrees to radians
+            lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+
+            # Haversine formula for great-circle distance
+            dlat = lat2 - lat1
+            dlon = lon2 - lon1
+            a = (
+                math.sin(dlat / 2) ** 2
+                + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+            )
+            c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+            # Horizontal distance on the Earth's surface
+            R = 6371.01  # Earth's radius in kilometers
+            horizontal_distance = R * c
+
+            # Vertical distance (altitude difference)
+            altitude_difference = alt2 - alt1
+
+            # 3D distance calculation using Pythagoras' theorem
+            return math.sqrt(horizontal_distance**2 + altitude_difference**2)
+        else:
+            # Use Euclidean distance for local metric systems
+            return np.linalg.norm(self.get_position() - node.get_position())
 
     def get_id(self) -> int:
         return self._node_id
@@ -125,14 +169,14 @@ class BaseStation(AbstractNode):
         node_id: int,
         position: NDArray,
         basestation_type: BaseStationType,
+        isGeographic: bool = True,
     ):
-        super().__init__()
-        self._node_id = node_id
-        self._position = position
+        super().__init__(
+            node_id=node_id,
+            position=position,
+            isGeographic=isGeographic,
+        )
         self.basestation_type = basestation_type
-
-        self._parent: Optional[AbstractNode] = None
-        self._childeren: List[AbstractNode] = []
         self.connected_user: List[User] = []
         self.jamming_power_density: float = 0.0
         self.throughput: float = 0.0
@@ -148,8 +192,7 @@ class BaseStation(AbstractNode):
         self._set_transmission_and_jamming_power_density()
         denominator = 0.0
         for node in self.get_childeren():
-            distance = np.linalg.norm(self.get_position() - node.get_position())
-            snr = self._compute_snr(distance)
+            snr = self._compute_snr(node)
             spectral_efficiency = np.log2(1 + snr)
             if isinstance(node, User):
                 sum_hops = user.hops
@@ -162,7 +205,7 @@ class BaseStation(AbstractNode):
         self.throughput = self.basestation_type.config.bandwidth * 1e6 / denominator
         return self.throughput
 
-    def _compute_snr(self, distance_km, in_dB: bool = False) -> float:
+    def _compute_snr(self, node, in_dB: bool = False) -> float:
         """
         Computes SNR (in dB) at a given distance (meters) using a log-distance pathloss model.
         Assumes that power_capacity in BaseStationConfig is in dBm, carrier_frequency is in GHz,
@@ -173,7 +216,7 @@ class BaseStation(AbstractNode):
         Pathloss(dB) = Pathloss(1m) + 10*alpha*log10(d/1m)
         NoisePower(dBm) = -174 + 10*log10(BW_Hz)
         """
-        distance_m = distance_km * 1e3
+        distance_m = self.get_distance(node) * 1e3
         config = self.basestation_type.config
 
         # Physical constants and configuration parameters
@@ -230,17 +273,17 @@ class BaseStation(AbstractNode):
         noise_power_density = dB_to_linear(environmental_variables.noise_power_density)
         tau = environmental_variables.SPSC_probability
         kappa = (
-            4
-            * np.pi**2
+            np.pi
             * self.basestation_type.config.eavesdropper_density
-            / np.sin(3 * np.pi / pathloss_exponent)
+            / np.sin(2 * np.pi / pathloss_exponent)
         )
         max_distance = self._get_farthest_forward_link_distance()
 
         # Equation for threshold
         jamming_power_density_mW_over_Hz = (
             max(
-                abs(-(kappa**3 * max_distance) / np.log(tau)) ** pathloss_exponent - 1,
+                abs(-(kappa * max_distance**2) / np.log(tau)) ** (pathloss_exponent / 2)
+                - 1,
                 0,
             )
             * noise_power_density
@@ -263,18 +306,18 @@ class BaseStation(AbstractNode):
     def _get_farthest_forward_link_distance(self):
         max_distance = 0.0
         for node in self.get_childeren():
-            distance = np.linalg.norm(self.get_position() - node.get_position())
+            distance = self.get_distance(node)
             if distance > max_distance:
                 max_distance = distance
         return max_distance
 
 
 class User(AbstractNode):
-    def __init__(self, node_id: int, position: NDArray):
-        super().__init__()
-        self._node_id = node_id
-        self._position = position
-        self._parent: Optional[AbstractNode] = None
+    def __init__(self, node_id: int, position: NDArray, isGeographic: bool = True):
+        super().__init__(
+            node_id=node_id,
+            position=position,
+        )
         self.hops: int = 0
 
     def __repr__(self):
@@ -340,16 +383,44 @@ class IABRelayGraph:
                     break
 
     def __repr__(self):
-        return f"Graph(num_nodes={len(self.nodes)}"
+        num_maritime_nodes = 0
+        num_ground_nodes = 0
+        num_leo_nodes = 0
+        num_haps_nodes = 0
+        num_users = 0
+        for node in self.nodes.values():
+            if isinstance(node, BaseStation):
+                if node.basestation_type == BaseStationType.MARITIME:
+                    num_maritime_nodes += 1
+                elif node.basestation_type == BaseStationType.GROUND:
+                    num_ground_nodes += 1
+                elif node.basestation_type == BaseStationType.LEO:
+                    num_leo_nodes += 1
+                elif node.basestation_type == BaseStationType.HAPS:
+                    num_haps_nodes += 1
+            elif isinstance(node, User):
+                num_users += 1
+
+        # Total number of nodes
+        total_nodes = (
+            num_maritime_nodes + num_ground_nodes + num_leo_nodes + num_haps_nodes
+        )
+
+        # Generate the representation string
+        return (
+            f"<NodeSummary: Total Nodes={total_nodes}, "
+            f"Maritime={num_maritime_nodes}, Ground={num_ground_nodes}, "
+            f"LEO={num_leo_nodes}, HAPS={num_haps_nodes}, Users={num_users}>"
+        )
 
 
 if __name__ == "__main__":
     graph = IABRelayGraph(environmental_variables)
-    bs0 = BaseStation(0, np.array([0, 0, 0]), BaseStationType.GROUND)
-    bs1 = BaseStation(1, np.array([250, 100, 800]), BaseStationType.SPACE)
-    bs2 = BaseStation(2, np.array([150, 200, 25]), BaseStationType.AIR)
-    bs3 = BaseStation(3, np.array([300, 301, 0]), BaseStationType.SEA)
-    bs4 = BaseStation(4, np.array([450, 300, 0]), BaseStationType.SEA)
+    bs0 = BaseStation(0, np.array([0, 0, 0]), BaseStationType.GROUND, False)
+    bs1 = BaseStation(1, np.array([250, 100, 400]), BaseStationType.LEO, False)
+    bs2 = BaseStation(2, np.array([150, 200, 25]), BaseStationType.HAPS, False)
+    bs3 = BaseStation(3, np.array([300, 301, 0]), BaseStationType.MARITIME, False)
+    bs4 = BaseStation(4, np.array([450, 300, 0]), BaseStationType.MARITIME, False)
     user1 = User(19, np.array([1, 1, 0]))
     user2 = User(20, np.array([1, 2, 0]))
     user3 = User(21, np.array([1, 6, 0]))
@@ -392,5 +463,5 @@ if __name__ == "__main__":
     print(f"{bs0.connected_user=}")
     for user in graph.users:
         print(f"{user.hops=}")
-    print(bs0._compute_snr(500, in_dB=True))
     print(bs0.compute_throughput())
+    print(bs0.get_distance(bs1))
