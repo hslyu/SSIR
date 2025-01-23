@@ -7,7 +7,9 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE.txt)
 
 </div>
-______________________________________________________________________
+
+SSIR is a comprehensive implementation of multi-hop relaying space-air-ground-sea integrated networks; and an official implementation of the paper titled "-".
+This repository contains a variety of routing algorithms including A*(or Dijkstra), genetic algorithm, graph convolutional network (GCN), and graph attention network (GAT).
 
 ## Installation
 
@@ -22,6 +24,26 @@ pip install .
 ______________________________________________________________________
 
 ## Quickstart
+```
+dm = env.DataManager()
+pm = env.PlotManager()
+graph = dm.generate_master_graph()
+
+# 2. Run the A* algorithm
+costs, predecessors = pf.a_star(graph, metric="distance")
+graph_astar_distance = pf.get_solution_graph(graph, predecessors)
+
+costs, predecessors = pf.a_star(graph, metric="hop")
+graph_astar_hop = pf.get_solution_graph(graph, predecessors)
+
+graph_list = [graph_astar_distance, graph_astar_hop]
+
+print(f"A* distance throughput: {graph_astar_distance.compute_network_throughput()}")
+print(f"A* hop throughput: {graph_astar_hop.compute_network_throughput()}")
+pm.plot_dm(dm, graph_list)
+```
+
+
 ______________________________________________________________________
 
 ### Overview
