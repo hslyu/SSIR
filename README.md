@@ -1,6 +1,6 @@
 <div align="center">    
 
-# SSIR: AN implementation of Secure SAGSIN IAB Relay Network
+# SSIR: Secure SAGSIN IAB Relay Network
 
 ![GitHub release (latest SemVer)](https://img.shields.io/badge/release-v0.1.0-blue)
 [![Read the Docs](https://img.shields.io/readthedocs/torch-influence)](asdf/)
@@ -42,7 +42,7 @@ print(f"A* distance throughput: {graph_astar_distance.compute_network_throughput
 print(f"A* hop throughput: {graph_astar_hop.compute_network_throughput()}")
 pm.plot_dm(dm, graph_list)
 ```
-
+<img src="./example.png" title="Code result"/>
 
 ______________________________________________________________________
 
