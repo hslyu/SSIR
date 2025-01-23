@@ -25,22 +25,16 @@ ______________________________________________________________________
 
 ## Quickstart
 ```
+from ssir import environment as env
+
 dm = env.DataManager()
 pm = env.PlotManager()
-graph = dm.generate_master_graph()
+master_graph = dm.generate_master_graph()
 
-# 2. Run the A* algorithm
-costs, predecessors = pf.a_star(graph, metric="distance")
-graph_astar_distance = pf.get_solution_graph(graph, predecessors)
+costs, predecessors_distance = pf.a_star(master_graph, metric="distance")
+graph = pf.get_solution_graph(graph, predecessors_distance)
 
-costs, predecessors = pf.a_star(graph, metric="hop")
-graph_astar_hop = pf.get_solution_graph(graph, predecessors)
-
-graph_list = [graph_astar_distance, graph_astar_hop]
-
-print(f"A* distance throughput: {graph_astar_distance.compute_network_throughput()}")
-print(f"A* hop throughput: {graph_astar_hop.compute_network_throughput()}")
-pm.plot_dm(dm, graph_list)
+pm.plot_dm(dm, graph)
 ```
 <img src="./example.png" style="width: 600px; height: auto;" title="Code result"/>
 
