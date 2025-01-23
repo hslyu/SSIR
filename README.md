@@ -42,7 +42,7 @@ print(f"A* distance throughput: {graph_astar_distance.compute_network_throughput
 print(f"A* hop throughput: {graph_astar_hop.compute_network_throughput()}")
 pm.plot_dm(dm, graph_list)
 ```
-<img src="./example.png" style="width: 100px; height: auto;" title="Code result"/>
+<img src="./example.png" style="width: 600px; height: auto;" title="Code result"/>
 
 ______________________________________________________________________
 
