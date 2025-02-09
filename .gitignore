@@ -26,6 +26,8 @@
 *.backup
 *.bak
 *.tmp
+*.old
+*.egg-info
 
 # Ignore package manager-related directories
 node_modules/
@@ -33,7 +35,9 @@ vendor/
 target/
 out/
 dist/
+build/
+**/legacy/
 
 # Ignore directories containing "results"
 **/results*/
-
+**/__pycache__*/
