@@ -1,0 +1,39 @@
+# Ignore compiled object files and binaries
+*.o
+*.ko
+*.obj
+*.elf
+*.out
+*.so
+*.a
+*.la
+*.lo
+*.class
+*.jar
+
+# Ignore editor and environment-specific files
+*~
+.*.swp
+.*.swo
+.cache/
+.ccls-cache/
+.tags
+
+# Ignore logs and temporary files
+*.log
+*.pid
+*.seed
+*.backup
+*.bak
+*.tmp
+
+# Ignore package manager-related directories
+node_modules/
+vendor/
+target/
+out/
+dist/
+
+# Ignore directories containing "results"
+**/results*/
+
