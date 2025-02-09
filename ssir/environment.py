@@ -1,3 +1,4 @@
+import os
 import random
 from dataclasses import dataclass
 from typing import List, Optional, Union
@@ -6,15 +7,55 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 from shapely.geometry import Point, box
+from shapely.ops import nearest_points
 
-from . import basestations as bs
+from ssir import basestations as bs
+from ssir import pathfinder as pf
+
+# Predefined maps
+map_list = [
+    {
+        "latitude_range": [25, 55],
+        "longitude_range": [-15, 65],
+    },
+    {
+        "latitude_range": [-18, 12],
+        "longitude_range": [90, 150],
+    },
+    {
+        "latitude_range": [10, 40],
+        "longitude_range": [100, 150],
+    },
+    {
+        "latitude_range": [-8, 22],
+        "longitude_range": [35, 105],
+    },
+    {
+        "latitude_range": [22, 52],
+        "longitude_range": [-83, 2],
+    },
+]
+
+
+def generate_config(exp_index):
+    random.seed(exp_index)
+    config = {
+        "num_maritime_basestations": random.randint(40, 50),
+        "num_ground_basestations": random.randint(60, 80),
+        "num_haps_basestations": random.randint(15, 20),
+        "num_leo_basestations": random.randint(10, 15),
+        "num_users": random.randint(30, 60),
+        "random_seed": exp_index,
+    }
+    config.update(map_list[exp_index % len(map_list)])
+    return config
 
 
 class DataManager:
     def __init__(
         self,
-        langitude_range: List[float],
         longitude_range: List[float],
+        latitude_range: List[float],
         land_shp_path: str = "map/ne_10m_land/ne_10m_land.shp",
         lakes_shp_path: str = "map/ne_10m_lakes/ne_10m_lakes.shp",
         rivers_shp_path: str = "map/ne_10m_rivers_lake_centerlines/ne_10m_rivers_lake_centerlines.shp",
@@ -29,8 +70,13 @@ class DataManager:
         random_seed: int = 42,
         **kwargs,
     ):
-        self.langitude_range = langitude_range
+        # if master_dir arguemnt is provided, use the master_dir to load the shapefiles
+        if "master_dir" in kwargs:
+            master_dir = kwargs["master_dir"]
+        else:
+            master_dir = "."
         self.longitude_range = longitude_range
+        self.latitude_range = latitude_range
         self.land_shp_path = land_shp_path
         self.lakes_shp_path = lakes_shp_path
         self.rivers_shp_path = rivers_shp_path
@@ -49,19 +95,19 @@ class DataManager:
         ####################
         # Generate a bounding box for the area of interest
         self.bbox = box(
-            minx=langitude_range[0],
-            miny=longitude_range[0],
-            maxx=langitude_range[1],
-            maxy=longitude_range[1],
+            minx=longitude_range[0],
+            miny=latitude_range[0],
+            maxx=longitude_range[1],
+            maxy=latitude_range[1],
         )
         self.bbox_gdf = gpd.GeoDataFrame({"geometry": [self.bbox]}, crs=target_crs)
 
         # Load the shapefiles for land, lakes, rivers, and maritime areas
-        land = gpd.read_file(land_shp_path)
-        lakes = gpd.read_file(lakes_shp_path)
-        rivers = gpd.read_file(rivers_shp_path)
-        maritime = gpd.read_file(maritime_shp_path)
-        coastline = gpd.read_file(coastline_shp_path)
+        land = gpd.read_file(os.path.join(master_dir, land_shp_path))
+        lakes = gpd.read_file(os.path.join(master_dir, lakes_shp_path))
+        rivers = gpd.read_file(os.path.join(master_dir, rivers_shp_path))
+        maritime = gpd.read_file(os.path.join(master_dir, maritime_shp_path))
+        coastline = gpd.read_file(os.path.join(master_dir, coastline_shp_path))
 
         self.gdf_list = [land, lakes, rivers, maritime, coastline]
         for gdf in self.gdf_list:
@@ -74,13 +120,13 @@ class DataManager:
         ####################
         # Filter the data to the bounding box
         source_basestation_point = self.generate_random_points_within_gdf(
-            self.gdf_list[0], 1
+            self.gdf_list[0], 1, near_coastline=True, offset_length=3, source=True
         )
         maritime_basestations_points = self.generate_random_points_within_gdf(
             self.gdf_list[3], num_maritime_basestations
         )
         ground_basestations_points = self.generate_random_points_within_gdf(
-            self.gdf_list[0], num_ground_basestations
+            self.gdf_list[0], num_ground_basestations, near_coastline=True
         )
         haps_basestations_points = self.generate_random_points_within_gdf(
             self.bbox_gdf, num_haps_basestations
@@ -103,7 +149,14 @@ class DataManager:
             for node_points in node_point_list
         ]
 
-    def generate_random_points_within_gdf(self, target_gdf, num_points):
+    def generate_random_points_within_gdf(
+        self,
+        target_gdf,
+        num_points,
+        near_coastline=False,
+        offset_length=1,
+        source=False,
+    ):
         """
         Generate random points within a given GeoDataFrame.
 
@@ -122,12 +175,36 @@ class DataManager:
 
         while len(points) < num_points and attempts < max_attempts:
             # Generate random points within the bounding box
-            random_lon = random.uniform(minx, maxx)
-            random_lat = random.uniform(miny, maxy)
+            random_lon = random.uniform(minx * 1.01, maxx * 0.99)
+            if source:
+                random_lat = miny + (maxy - miny) * random.uniform(0.05, 0.95)
+            else:
+                random_lat = random.uniform(miny * 1.01, maxy * 0.99)
             point = Point(random_lon, random_lat)
-            # Check if the generated point is within the target GeoDataFrame
             if target_gdf.contains(point).any():
-                points.append(point)
+                if near_coastline:
+                    # Find the nearest point on the coastline
+                    nearest_geometry = nearest_points(
+                        point, self.gdf_list[-1].unary_union
+                    )[1]
+
+                    # Generate a random offset from the nearest point
+                    offset_lat = random.uniform(-offset_length, offset_length)
+                    offset_lon = random.uniform(-offset_length, offset_length)
+                    new_point = Point(
+                        nearest_geometry.x + offset_lon, nearest_geometry.y + offset_lat
+                    )
+                    if target_gdf.contains(new_point).any():
+                        points.append(new_point)
+                    else:
+                        new_point = Point(
+                            nearest_geometry.x - offset_lon,
+                            nearest_geometry.y - offset_lat,
+                        )
+                        if target_gdf.contains(new_point).any():
+                            points.append(new_point)
+                else:
+                    points.append(point)
             attempts += 1
 
         if len(points) < num_points:
@@ -145,7 +222,6 @@ class DataManager:
         return gpd.clip(gdf, bbox)
 
     def generate_master_graph(self) -> bs.IABRelayGraph:
-        # WARNING: BASESTATION order should be the same as the order of BaseStationType
         graph = bs.IABRelayGraph(bs.environmental_variables)
 
         basestations_gdf_list = self.node_gdf_list[:-1]
@@ -186,6 +262,48 @@ class DataManager:
             node_id += 1
 
         graph.connect_reachable_nodes()
+        costs, predecessors = pf.astar.a_star(graph, metric="hop")
+        for user in graph.users:
+            path = pf.astar.get_shortest_path(predecessors, user.get_id())
+            if path[0] == -1:
+                graph.remove_node(user.get_id())
+
+        # # Determine users are connected to at least one basestation
+        # for user in graph.users:
+        #     if len(user.get_parent()) == 0:
+        #         while True:
+        #             user._position = np.array(
+        #                 [
+        #                     random.uniform(*self.longitude_range),
+        #                     random.uniform(*self.latitude_range),
+        #                     0,
+        #                 ]
+        #             )
+        #             graph.connect_reachable_nodes()
+        #             if len(user.get_parent()) > 0:
+        #                 break
+
+        # Determine whether the source is connected to sufficient number of basestations
+        source = graph.nodes[0]
+        while len(source.get_children()) < 3:
+            source._position = np.array(
+                [
+                    random.uniform(*self.longitude_range),
+                    random.uniform(*self.latitude_range),
+                    0,
+                ]
+            )
+            graph.connect_reachable_nodes()
+
+        source = graph.nodes[0]
+        while len(source.get_children()) < 3:
+            source_basestation_point = self.generate_random_points_within_gdf(
+                self.gdf_list[0], 1, near_coastline=True, offset_length=3, source=True
+            )
+            source._position = np.array(
+                [source_basestation_point[0].x, source_basestation_point[0].y, 0]
+            )
+
         return graph
 
 
@@ -196,10 +314,10 @@ class PlotManager:
     markersize = 15
     linewidth = 1
     gdf_color_list = [
-        np.array([240, 255, 240]) / 255.0,  # land
-        np.array([212, 238, 255]) / 255.0,  # lakes
-        np.array([212, 238, 255]) / 255.0,  # rivers
-        np.array([212, 238, 255]) / 255.0,  # maritime
+        np.array([230, 255, 230]) / 255.0,  # land
+        np.array([122, 213, 255]) / 255.0,  # lakes
+        np.array([122, 213, 255]) / 255.0,  # rivers
+        np.array([122, 213, 255]) / 255.0,  # maritime
         np.array([0, 0, 0]) / 255.0,  # coastline
     ]
     node_color_list = [
@@ -224,22 +342,47 @@ class PlotManager:
         self,
         dm: DataManager,
         graph_list: Optional[Union[bs.IABRelayGraph, List[bs.IABRelayGraph]]] = None,
+        verbose: bool = False,
     ):
-        fig, ax = plt.subplots(figsize=(12, 12))
+        fig, ax = plt.subplots(figsize=(10, 10))
+
+        # Set the plot limits to the bounding box
+        ax.set_xlim(*dm.longitude_range)
+        ax.set_ylim(*dm.latitude_range)
+        # Add title and legend
+        ax.set_xlabel("Longitude", fontsize=self.fontsize)
+        ax.set_ylabel("Latitude", fontsize=self.fontsize)
+        ax.tick_params(axis="both", which="major", labelsize=self.fontsize)
+
+        # Plot the geographical data
         for gdf, color in zip(dm.gdf_list, self.gdf_color_list):
             if gdf.empty:
                 continue
-            gdf.plot(ax=ax, color=color, zorder=1)
+            gdf.plot(ax=ax, color=color, linewidth=0, zorder=1)
 
+        node_id = 0
         for i, node_gdf in enumerate(dm.node_gdf_list):
+            color = self.node_color_list[i]
             node_gdf.plot(
                 ax=ax,
-                color=self.node_color_list[i],
+                color=color,
                 marker=self.node_marker_list[i],
                 markersize=self.markersize if i != 0 else self.markersize * 10,
                 label=self.node_label_list[i],
                 zorder=2,
             )
+
+            # print node id on the plot
+            if verbose:
+                for idx, row in node_gdf.iterrows():
+                    ax.text(
+                        row["geometry"].x - 1.1,
+                        row["geometry"].y - 1.6,
+                        f"{node_id}",
+                        fontsize=12,
+                    )
+                    node_id += 1
+
         if graph_list is None:
             return
 
@@ -258,14 +401,6 @@ class PlotManager:
                     linestyle="--",
                     linewidth=self.linewidth,
                 )
-
-        # Set the plot limits to the bounding box
-        ax.set_xlim(*dm.langitude_range)
-        ax.set_ylim(*dm.longitude_range)
-        # Add title and legend
-        ax.set_xlabel("Longitude", fontsize=self.fontsize)
-        ax.set_ylabel("Latitude", fontsize=self.fontsize)
-        ax.tick_params(axis="both", which="major", labelsize=self.fontsize)
         ax.legend(loc="lower left")
 
 
@@ -273,30 +408,32 @@ def main():
     import pathfinder as pf
 
     config = {
-        "langitude_range": [-90, 10],
-        "longitude_range": [20, 50],
+        "longitude_range": [-90, 10],
+        "latitude_range": [20, 50],
         "num_maritime_basestations": 20,
         "num_ground_basestations": 25,
         "num_haps_basestations": 20,
         "num_leo_basestations": 15,
         "num_users": 10,
     }
-    dm = DataManager(**config)
+    dm = DataManager(**config, master_dir="/home/hslyu/research/SSIR/scripts/")
     pm = PlotManager()
     graph = dm.generate_master_graph()
 
-    costs, predecessors = pf.a_star(graph, metric="distance")
-    graph_astar_distance = pf.get_solution_graph(graph, predecessors)
+    c = dm.gdf_list[-1]
 
-    costs, predecessors = pf.a_star(graph, metric="hop")
-    graph_astar_hop = pf.get_solution_graph(graph, predecessors)
-
-    graph_list = [graph_astar_distance, graph_astar_hop]
-
-    print(
-        f"A* distance throughput: {graph_astar_distance.compute_network_throughput()}"
-    )
-    print(f"A* hop throughput: {graph_astar_hop.compute_network_throughput()}")
+    # costs, predecessors = pf.astar.a_star(graph, metric="distance")
+    # graph_astar_distance = pf.astar.get_solution_graph(graph, predecessors)
+    #
+    # costs, predecessors = pf.astar.a_star(graph, metric="hop")
+    # graph_astar_hop = pf.astar.get_solution_graph(graph, predecessors)
+    #
+    # graph_list = [graph_astar_distance, graph_astar_hop]
+    #
+    # print(
+    #     f"A* distance throughput: {graph_astar_distance.compute_network_throughput()}"
+    # )
+    # print(f"A* hop throughput: {graph_astar_hop.compute_network_throughput()}")
 
 
 if __name__ == "__main__":

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 
+import json
 import math
-import queue
 from abc import ABC
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Optional, Tuple
 
+import networkx as nx
 import numpy as np
 from numpy.typing import NDArray
 
@@ -18,7 +19,7 @@ class EnvironmentalVariables:
     maritime_basestations_altitude: float = 0.0
     ground_basestations_altitude: float = 0.25
     haps_basestations_altitude: float = 22
-    leo_basestations_altitude: float = 500
+    leo_basestations_altitude: float = 800
 
 
 environmental_variables = EnvironmentalVariables()
@@ -48,48 +49,47 @@ class BaseStationConfig:
 class BaseStationType(Enum):
     MARITIME = BaseStationConfig(
         power_capacity=30,  # in dBm
-        minimum_transit_power_ratio=0.8,  # dimensionless
+        minimum_transit_power_ratio=0.9,  # dimensionless
         carrier_frequency=14,  # in GHz
         bandwidth=250,  # in MHz
         transmit_antenna_gain=25,  # in dBi
         receive_antenna_gain=25,  # in dBi
         antenna_gain_to_noise_temperature=1.5,  # in dB
         pathloss_exponent=3.2,  # dimensionless
-        eavesdropper_density=1e-5,  # in km^-2
+        eavesdropper_density=1e-4,  # in km^-2
     )
     GROUND = BaseStationConfig(
         power_capacity=30,  # in dBm
-        minimum_transit_power_ratio=0.8,  # dimensionless
+        minimum_transit_power_ratio=0.9,  # dimensionless
         carrier_frequency=14,  # in GHz
         bandwidth=250,  # in MHz
         transmit_antenna_gain=25,  # in dBi
         receive_antenna_gain=25,  # in dBi
         antenna_gain_to_noise_temperature=1.5,  # in dB
-        pathloss_exponent=3.5,  # dimensionless
-        # eavesdropper_density=1 / 9e2,  # in km^-2
-        eavesdropper_density=1e-5,  # in km^-2
+        pathloss_exponent=3.2,  # dimensionless
+        eavesdropper_density=1e-4,  # in km^-2
     )
     HAPS = BaseStationConfig(
         power_capacity=30,  # in dBm
-        minimum_transit_power_ratio=0.8,  # dimensionless
+        minimum_transit_power_ratio=0.90,  # dimensionless
         carrier_frequency=14,  # in GHz
         bandwidth=250,  # in MHz
         transmit_antenna_gain=25,  # in dBi
         receive_antenna_gain=25,  # in dBi
         antenna_gain_to_noise_temperature=1.5,  # in dB
         pathloss_exponent=2.7,  # dimensionless
-        eavesdropper_density=5e-4,  # in km^-2
+        eavesdropper_density=3e-4,  # in km^-2
     )
     LEO = BaseStationConfig(
         power_capacity=21.5,  # in dBm
-        minimum_transit_power_ratio=0.9,  # dimensionless
+        minimum_transit_power_ratio=0.90,  # dimensionless
         carrier_frequency=20,  # in GHz
         bandwidth=400,  # in MHz
         transmit_antenna_gain=38.5,  # in dBi
         receive_antenna_gain=38.5,  # in dBi
         antenna_gain_to_noise_temperature=13,  # in dB
-        pathloss_exponent=2.2,  # dimensionless
-        eavesdropper_density=5e-4,  # in km^-2
+        pathloss_exponent=2.4,  # dimensionless
+        eavesdropper_density=3e-4,  # in km^-2
     )
 
     @property
@@ -204,6 +204,7 @@ class BaseStation(AbstractNode):
         )
         self.basestation_type = basestation_type
         self.connected_user: List[User] = []
+        self.transmission_power_density: float = 0.0
         self.jamming_power_density: float = 0.0
         self.throughput: float = 0.0
 
@@ -391,6 +392,15 @@ class IABRelayGraph:
 
         self.adjacency_list: Dict[int, List[int]] = {}
         self.environmental_variables = environmental_variables
+        self.is_hop_computed = False
+
+    @property
+    def edges(self):
+        edges = []
+        for from_node_id, neighbors in self.adjacency_list.items():
+            for to_node_id in neighbors:
+                edges.append((from_node_id, to_node_id))
+        return edges
 
     def add_node(self, node: AbstractNode):
         node_id = node.get_id()
@@ -404,25 +414,12 @@ class IABRelayGraph:
             else:
                 raise ValueError("Unsupported node type.")
 
-    @property
-    def edges(self):
-        edges = []
-        for from_node_id, neighbors in self.adjacency_list.items():
-            for to_node_id in neighbors:
-                edges.append((from_node_id, to_node_id))
-        return edges
-
     def add_edge(self, from_node_id: int, to_node_id: int):
         # check if the edge already exists
         if to_node_id in self.adjacency_list[from_node_id]:
             return
 
         if from_node_id in self.nodes and to_node_id in self.nodes:
-            # if self.nodes[to_node_id].has_parent():
-            #     raise ValueError(
-            #         f"Node {self.nodes[to_node_id]} already has a backhual link."
-            #     )
-
             self.adjacency_list[from_node_id].append(to_node_id)
             self.nodes[from_node_id].add_child_link(self.nodes[to_node_id])
             self.nodes[to_node_id].add_parent_link(self.nodes[from_node_id])
@@ -489,32 +486,14 @@ class IABRelayGraph:
         for user in self.users:
             user.hops = 0
 
-    def connect_reachable_nodes(self, source_node_id: int = 0):
-        """
-        Connects all rechable nodes in the graph.
-        """
-        for from_node in self.basestations:
-            from_node_id = from_node.get_id()
-            # if from_node_id == source_node_id:
-            #     continue
-            for to_node_id in self.compute_rechable_nodes(from_node_id):
-                self.add_edge(from_node_id, to_node_id)
-
-        # for to_node_id in self.compute_rechable_nodes(source_node_id):
-        #     if isinstance(self.nodes[to_node_id], BaseStation):
-        #         self.add_edge(source_node_id, to_node_id)
-        for node in self.nodes[source_node_id].get_children():
-            if isinstance(node, User):
-                self.adjacency_list[source_node_id].remove(node.get_id())
-
-                # Update the parent and child links of the involved nodes
-                self.nodes[source_node_id].remove_child_link(self.nodes[node.get_id()])
-                self.nodes[node.get_id()].remove_parent_link(self.nodes[source_node_id])
-
     def get_neighbors(self, node_id: int) -> List[int]:
         return self.adjacency_list.get(node_id, [])
 
     def compute_hops(self):
+        if self.is_hop_computed:
+            return
+
+        self.is_hop_computed = True
         for user in self.users:
             current_node = user
             while True:
@@ -529,6 +508,25 @@ class IABRelayGraph:
                     current_node.connected_user.append(user)
                 else:
                     break
+
+    def connect_reachable_nodes(self, source_node_id: int = 0):
+        """
+        Connects all rechable nodes in the graph.
+        """
+        for from_node in self.basestations:
+            from_node_id = from_node.get_id()
+            for to_node_id in self.compute_rechable_nodes(from_node_id):
+                if from_node_id == to_node_id or to_node_id == source_node_id:
+                    continue
+                self.add_edge(from_node_id, to_node_id)
+
+        for node in self.nodes[source_node_id].get_children():
+            if isinstance(node, User):
+                self.adjacency_list[source_node_id].remove(node.get_id())
+
+                # Update the parent and child links of the involved nodes
+                self.nodes[source_node_id].remove_child_link(self.nodes[node.get_id()])
+                self.nodes[node.get_id()].remove_parent_link(self.nodes[source_node_id])
 
     def compute_rechable_nodes(self, node_id: int):
         if node_id not in self.nodes:
@@ -578,14 +576,83 @@ class IABRelayGraph:
 
     def compute_network_throughput(self):
         self.compute_hops()
-        min_throughput = float("inf")
-        for node in self.basestations:
+        min_throughput = float("500")
+        for node in self.basestations[1:]:
             if not node.has_children():
                 continue
             throughput = node.compute_throughput()
             if throughput < min_throughput:
                 min_throughput = throughput
         return min_throughput
+
+    def save_graph(self, filepath: str):
+        """
+        Save the graph to a file.
+        """
+        # Save the graph as a JSON file
+        data = {
+            "nodes": {
+                node_id: {
+                    "position": node.get_position().tolist(),
+                    "type": node.basestation_type.name
+                    if isinstance(node, BaseStation)
+                    else "User",
+                }
+                for node_id, node in self.nodes.items()
+            },
+            "edges": self.edges,
+        }
+
+        with open(filepath, "w") as file:
+            json.dump(data, file, indent=4)
+
+    def load_graph(self, filepath: str):
+        """
+        Load the graph from a file.
+        """
+        # Load the graph from a JSON file
+        with open(filepath, "r") as file:
+            data = json.load(file)
+
+        # Create nodes
+        for node_id, node_data in data["nodes"].items():
+            position = np.array(node_data["position"])
+            if node_data["type"] == "User":
+                node = User(int(node_id), position)
+            else:
+                node = BaseStation(
+                    int(node_id),
+                    position,
+                    BaseStationType[node_data["type"]],
+                )
+            self.add_node(node)
+
+        # Create edges
+        for from_node_id, to_node_id in data["edges"]:
+            self.add_edge(from_node_id, to_node_id)
+
+    def to_networkx(self):
+        """
+        Convert the graph to a networkx graph.
+        """
+        graph = nx.DiGraph()
+        for node_id, node in self.nodes.items():
+            graph.add_node(node_id)
+        for from_node_id, neighbors in self.adjacency_list.items():
+            for to_node_id in neighbors:
+                graph.add_edge(from_node_id, to_node_id)
+        return graph
+
+    def from_networkx(self, graph: nx.DiGraph):
+        """
+        Convert a networkx graph to the IABRelayGraph.
+        """
+        self.nodes = {}
+        self.adjacency_list = {}
+        for node_id in graph.nodes:
+            self.add_node(AbstractNode(node_id, np.array([0, 0, 0])))
+        for from_node_id, to_node_id in graph.edges:
+            self.add_edge(from_node_id, to_node_id)
 
     def __repr__(self):
         num_maritime_nodes = 0
@@ -676,11 +743,17 @@ if __name__ == "__main__":
             graph.add_edge(from_node.get_id(), to_node)
     print(graph.adjacency_list)
 
-    import pathfinder as pf
+    from ssir.pathfinder import astar
 
-    a, b = pf.a_star(graph)
+    a, b = astar.a_star(graph)
     print(a, b)
     for node in graph.nodes.values():
-        print(pf.get_shortest_path(b, node.get_id()))
-    print(graph.adjacency_list)
-    print(graph.nodes[0])
+        print(astar.get_shortest_path(b, node.get_id()))
+    # print(graph.adjacency_list)
+    # print(graph.nodes[0])
+    #
+    # nx_graph = graph.to_networkx()
+    # print(nx_graph.nodes)
+    # a = nx.all_simple_paths(nx_graph, 0, 1, cutoff=3)
+    # for path in a:
+    #     print(path)

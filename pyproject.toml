@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=40.9.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ssir"
+version = "0.1.0"
+description = "An official implementation of secure SAGSIN IAB relay (SSIR)"
+readme = "README.md"
+requires-python = ">=3.12.8"
+authors = [
+    {name = "Hyeonsu Lyu", email = "hslyu4@postech.ac.kr"},
+]
+license = {name = "MIT", file = "LICENSE"}
+keywords = ["SAGIN", "SAGSIN", "IAB", "relay", "secure"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Wireless Communications",
+    "Topic :: Scientific/Engineering :: Physical-layer Communications",
+    "Topic :: Scientific/Engineering :: Graph Machine Learning"
+]
+dependencies = [
+    "numpy>=2.2.1",
+    "geopandas>=1.0.1",
+    "matplotlib>=3.10.0",
+    "shapely>=2.0.6",
+]
+
+[project.urls]
+homepage = "https://github.com/hslyu/SSIR"
+
+[tool.setuptools.packages.find]
+where = ["."]

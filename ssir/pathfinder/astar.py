@@ -86,9 +86,9 @@ def get_solution_graph(
     :param predecessors: The predecessor dictionary returned by Dijkstra's algorithm
     :return: A new graph representing the shortest path
     """
-    node_ids = list(predecessors.keys()) + list(predecessors.values())
-    node_ids.remove(-1)
-    new_graph = graph.copy_graph_with_selected_nodes(node_ids)
+    node_ids = set(predecessors.keys()) | set(predecessors.values())
+    node_ids.discard(-1)
+    new_graph = graph.copy_graph_with_selected_nodes(list(node_ids))
     new_graph.reset()
 
     for user in graph.users:
