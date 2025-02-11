@@ -2,14 +2,17 @@
 
 import json
 import math
+import pickle
 from abc import ABC
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List
 
 import networkx as nx
 import numpy as np
+import torch
 from numpy.typing import NDArray
+from torch_geometric.data import Data
 
 
 @dataclass
@@ -93,7 +96,7 @@ class BaseStationType(Enum):
     )
 
     @property
-    def config(self, node=Optional["BaseStationType"]) -> BaseStationConfig:
+    def config(self) -> BaseStationConfig:
         """Returns the configuration for the base station type."""
         return self.value
 
@@ -585,10 +588,15 @@ class IABRelayGraph:
                 min_throughput = throughput
         return min_throughput
 
-    def save_graph(self, filepath: str):
+    def save_graph(self, filepath: str, pkl=True):
         """
         Save the graph to a file.
         """
+        if pkl:
+            with open(filepath, "wb") as file:
+                pickle.dump(self, file)
+            return
+
         # Save the graph as a JSON file
         data = {
             "nodes": {
@@ -606,10 +614,15 @@ class IABRelayGraph:
         with open(filepath, "w") as file:
             json.dump(data, file, indent=4)
 
-    def load_graph(self, filepath: str):
+    def load_graph(self, filepath: str, pkl=True):
         """
         Load the graph from a file.
         """
+        if pkl:
+            with open(filepath, "rb") as file:
+                self = pickle.load(file)
+            return
+
         # Load the graph from a JSON file
         with open(filepath, "r") as file:
             data = json.load(file)
@@ -637,11 +650,129 @@ class IABRelayGraph:
         """
         graph = nx.DiGraph()
         for node_id, node in self.nodes.items():
-            graph.add_node(node_id)
+            # Empty placeholder
+            feature = np.empty(0, dtype=np.float32)
+            # Concatenate the position of the user into feature
+            feature = np.concatenate((feature, node.get_position()))
+            # Convert node attributes to one np array
+            if isinstance(node, User):
+                configs = {
+                    "power_capacity": 0.0,
+                    "minimum_transit_power_ratio": 0.0,
+                    "carrier_frequency": 0.0,
+                    "bandwidth": 0.0,
+                    "transmit_antenna_gain": 0.0,
+                    "receive_antenna_gain": 0.0,
+                    "antenna_gain_to_noise_temperature": 0.0,
+                    "pathloss_exponent": 0.0,
+                    "eavesdropper_density": 0.0,
+                }
+                feature = np.concatenate((feature, np.array(list(configs.values()))))
+            elif isinstance(node, BaseStation):
+                feature = np.concatenate(
+                    (
+                        feature,
+                        np.array(list(vars(node.basestation_type.config).values())),
+                    )
+                )
+            graph.add_node(node_id, feature=feature)
         for from_node_id, neighbors in self.adjacency_list.items():
             for to_node_id in neighbors:
-                graph.add_edge(from_node_id, to_node_id)
+                # Compute the distance, snr, spectral efficiency as a feature
+                from_node = self.nodes[from_node_id]
+                to_node = self.nodes[to_node_id]
+                distance = from_node.get_distance(to_node)
+                if isinstance(from_node, BaseStation):
+                    from_node._set_transmission_and_jamming_power_density()
+                    snr = from_node._compute_snr(to_node)
+                    spectral_efficiency = np.log2(1 + snr)
+                    feature = np.array(
+                        [distance, snr, spectral_efficiency], dtype=np.float32
+                    )
+                else:
+                    feature = np.array([distance, 0.0, 0.0], dtype=np.float32)
+                graph.add_edge(from_node_id, to_node_id, feature=feature)
+
         return graph
+
+    def to_torch_geometric(self):
+        """
+        Convert the graph to a torch_geometric.data.Data object.
+        """
+        # Create a mapping from node ID to index
+        node_idx_map = {}
+        node_features = []
+        for idx, (node_id, node) in enumerate(self.nodes.items()):
+            node_idx_map[node_id] = idx
+            # Initialize feature with an empty array
+            feature = np.empty(0, dtype=np.float32)
+
+            # Concatenate the node type into the feature
+            if node_id == 0:
+                feature = np.append(feature, 0)
+            elif isinstance(node, User):
+                feature = np.append(feature, 1)
+            else:  # BaseStation
+                feature = np.append(feature, 2)
+
+            # Concatenate the node position into the feature
+            feature = np.concatenate((feature, node.get_position()))
+            # Append additional attributes based on the node type
+            if isinstance(node, User):
+                configs = {
+                    "power_capacity": 0.0,
+                    "minimum_transit_power_ratio": 0.0,
+                    "carrier_frequency": 0.0,
+                    "bandwidth": 0.0,
+                    "transmit_antenna_gain": 0.0,
+                    "receive_antenna_gain": 0.0,
+                    "antenna_gain_to_noise_temperature": 0.0,
+                    "pathloss_exponent": 0.0,
+                    "eavesdropper_density": 0.0,
+                }
+                feature = np.concatenate((feature, np.array(list(configs.values()))))
+            elif isinstance(node, BaseStation):
+                feature = np.concatenate(
+                    (
+                        feature,
+                        np.array(list(vars(node.basestation_type.config).values())),
+                    )
+                )
+            node_features.append(feature)
+
+        # Prepare lists for edge indices and edge features
+        edge_index = []
+        edge_features = []
+        for from_node_id, neighbors in self.adjacency_list.items():
+            for to_node_id in neighbors:
+                from_node = self.nodes[from_node_id]
+                to_node = self.nodes[to_node_id]
+                # Compute the distance between nodes
+                distance = from_node.get_distance(to_node)
+                # Compute additional edge features based on from_node type
+                if isinstance(from_node, BaseStation):
+                    from_node._set_transmission_and_jamming_power_density()
+                    snr = from_node._compute_snr(to_node)
+                    spectral_efficiency = np.log2(1 + snr)
+                    edge_feat = np.array(
+                        [distance, snr, spectral_efficiency], dtype=np.float32
+                    )
+                else:  # User
+                    edge_feat = np.array([distance, 0.0, 0.0], dtype=np.float32)
+                # Append edge index (using node indices) and edge features
+                edge_index.append(
+                    [node_idx_map[from_node_id], node_idx_map[to_node_id]]
+                )
+                edge_features.append(edge_feat)
+
+        # Convert lists to torch tensors
+        x = torch.tensor(np.stack(node_features), dtype=torch.float)
+        edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
+        edge_attr = torch.tensor(np.stack(edge_features), dtype=torch.float)
+
+        # Create and return the torch_geometric.data.Data object
+        data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+        return data
 
     def from_networkx(self, graph: nx.DiGraph):
         """
@@ -757,3 +888,5 @@ if __name__ == "__main__":
     # a = nx.all_simple_paths(nx_graph, 0, 1, cutoff=3)
     # for path in a:
     #     print(path)
+    gnx = graph.to_networkx()
+    print(gnx.nodes(data=True))

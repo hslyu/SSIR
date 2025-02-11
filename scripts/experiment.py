@@ -29,32 +29,35 @@ def run_experiment(exp_index, progress_queue):
     parent_dir = f"results/{exp_index}"
     os.makedirs(parent_dir, exist_ok=True)
     save_config(config, parent_dir)
+    graph.save_graph(os.path.join(parent_dir, "master_graph.pkl"))
+    progress_queue.put(1)
 
+    error_list = []
     try:
         # A* algorithm with distacne
         _, predecessors = astar.a_star(graph, metric="distance")
         graph_astar_distance = astar.get_solution_graph(graph, predecessors)
         graph_astar_distance.save_graph(
-            os.path.join(parent_dir, "graph_astar_distance.json")
+            os.path.join(parent_dir, "graph_astar_distance.pkl")
         )
 
         # A* algorithm with hop
         _, predecessors = astar.a_star(graph, metric="hop")
         graph_astar_hop = astar.get_solution_graph(graph, predecessors)
-        graph_astar_hop.save_graph(os.path.join(parent_dir, "graph_astar_hop.json"))
+        graph_astar_hop.save_graph(os.path.join(parent_dir, "graph_astar_hop.pkl"))
 
         # Genetic algorithm
         graph_genetic, _ = genetic.get_solution_graph(graph)
-        graph_genetic.save_graph(os.path.join(parent_dir, "graph_genetic.json"))
+        graph_genetic.save_graph(os.path.join(parent_dir, "graph_genetic.pkl"))
         progress_queue.put(1)
     except Exception as e:
-        print(f"Error in experiment {exp_index}: {e}")
+        error_list.append(f"Error in experiment {exp_index}: {e}")
         progress_queue.put(1)
 
 
 # %%
-num_experiments = 5000
-num_workers = 14
+num_experiments = 10000
+num_workers = 16
 
 # 진행률 표시를 위한 큐와 tqdm 설정
 manager = multiprocessing.Manager()
@@ -74,7 +77,10 @@ progress_process.start()
 
 # 멀티프로세싱 실행
 with multiprocessing.Pool(processes=num_workers) as pool:
-    pool.starmap(run_experiment, [(i, progress_queue) for i in range(num_experiments)])
+    pool.starmap(
+        run_experiment,
+        [(i, progress_queue) for i in range(10000, num_experiments + 10000)],
+    )
 
 # 진행률 업데이트 종료
 progress_process.join()
