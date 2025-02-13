@@ -33,8 +33,12 @@ def process_folder(idx):
     else:
         data_label = None
 
-    save_path = os.path.join(SAVE_DIR, f"{idx}.pt")
-    torch.save((data_master, data_label), save_path)
+    # if neither data_master nore data_label are None
+    if data_master is not None and data_label is not None:
+        save_path = os.path.join(SAVE_DIR, f"{idx}.pt")
+        torch.save((data_master, data_label), save_path)
+    else:
+        print(f"[{idx}] data_master or data_label is None")
     return idx
 
 
@@ -43,7 +47,7 @@ if __name__ == "__main__":
     total_folders = 50000
 
     # 프로세스 개수는 시스템에 맞게 조정
-    num_processes = 16
+    num_processes = 32
     with Pool(processes=num_processes) as pool:
         for _ in tqdm(
             pool.imap_unordered(process_folder, range(total_folders)),
