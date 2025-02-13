@@ -30,7 +30,6 @@ def run_experiment(exp_index, progress_queue):
     os.makedirs(parent_dir, exist_ok=True)
     save_config(config, parent_dir)
     graph.save_graph(os.path.join(parent_dir, "master_graph.pkl"))
-    progress_queue.put(1)
 
     error_list = []
     try:
@@ -49,10 +48,9 @@ def run_experiment(exp_index, progress_queue):
         # Genetic algorithm
         graph_genetic, _ = genetic.get_solution_graph(graph)
         graph_genetic.save_graph(os.path.join(parent_dir, "graph_genetic.pkl"))
-        progress_queue.put(1)
     except Exception as e:
         error_list.append(f"Error in experiment {exp_index}: {e}")
-        progress_queue.put(1)
+    progress_queue.put(1)
 
 
 # %%
