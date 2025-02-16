@@ -61,24 +61,27 @@ if __name__ == "__main__":
     # - hidden_channels: Hidden dimension (e.g., 32)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = gnn.GCNEdgeClassifier(
-        in_channels=13, hidden_channels=128, num_conv_layers=8, num_fc_layers=3
-    ).to(device)
-    # model = GATEdgeClassifier(
-    #     in_channels=13,
-    #     hidden_channels=4,
-    #     heads=8,
-    #     num_attention_layers=16,
-    #     num_linear_layers=2,
+    # model = gnn.GCNEdgeClassifier(
+    #     in_channels=13, hidden_channels=128, num_conv_layers=8, num_fc_layers=3
     # ).to(device)
+    model = gnn.GATEdgeClassifier(
+        in_channels=13,
+        hidden_channels=16,
+        heads=3,
+        num_attention_layers=8,
+        num_linear_layers=3,
+    ).to(device)
 
     # initialize weights
     model.apply(init_xavier_normal)
 
     # Compute global pos_weight and define the loss function
     print("Computing global pos_weight... ", end="")
-    pos_weight = compute_global_pos_weight(train_loader)
-    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weight, device=device))
+    # pos_weight = compute_global_pos_weight(train_loader)
+    pos_weight = 455.8257
+    criterion = nn.BCEWithLogitsLoss(
+        pos_weight=torch.tensor(pos_weight, device=device), reduction="mean"
+    )
     print(f"{pos_weight:.4f}")
 
     # Optimizer and scheduler

@@ -126,12 +126,6 @@ class GATEdgeClassifier(nn.Module):
                 GATConv(hidden_channels, hidden_channels, heads=heads, concat=False)
             )
 
-        # For residual connection in the first attention layer, if dimensions differ.
-        if use_residual and in_channels != hidden_channels:
-            self.att_residual_proj = nn.Linear(in_channels, hidden_channels)
-        else:
-            self.att_residual_proj = None
-
         # Build MLP layers for edge classification.
         self.mlp_layers = nn.ModuleList()
         if num_linear_layers == 1:
@@ -150,22 +144,17 @@ class GATEdgeClassifier(nn.Module):
 
         # Compute edge embeddings.
         x = self.nn_conv(x, edge_index, edge_attr)
-        x = F.relu(x)
+        x = F.elu(x)
+        x = self.att_layers[0](x, edge_index)
+        x = F.elu(x)
 
         # Apply attention layers with residual connections.
-        for idx, layer in enumerate(self.att_layers):
+        for idx, layer in enumerate(self.att_layers[1:]):
             identity = x
             x = layer(x, edge_index)
-            if self.use_residual:
-                # For the first layer, apply projection if needed.
-                if idx == 0 and self.att_residual_proj is not None:
-                    identity = self.att_residual_proj(identity)
-                if identity.shape == x.shape:
-                    x = F.relu(x + identity)
-                else:
-                    x = F.relu(x)
-            else:
-                x = F.relu(x)
+            if self.use_residual and identity.shape == x.shape:
+                x = x + identity
+            x = F.elu(x)
 
         # Concatenate node embeddings for each edge.
         row, col = edge_index
