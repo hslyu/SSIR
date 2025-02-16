@@ -12,6 +12,19 @@ def init_xavier_normal(module):
             nn.init.zeros_(module.bias)
 
 
+def compute_global_pos_weight(dataloader):
+    total_edges = 0
+    total_positives = 0
+    # 전체 학습 데이터를 순회하며 전체 edge 통계를 계산
+    for data_batch in dataloader:
+        # data_batch는 현재 CPU 메모리 상에 있음
+        targets = gnn.compute_edge_targets(data_batch)  # [num_edges, 1]
+        total_positives += targets.sum().item()
+        total_edges += targets.numel()
+    negatives = total_edges - total_positives
+    return negatives / total_positives if total_positives > 0 else 1.0
+
+
 if __name__ == "__main__":
     root_dir = "results_pt"
     dataset = gnn.GraphDataset(root_dir, total_files=50000, preload=False)
@@ -49,7 +62,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model = gnn.GCNEdgeClassifier(
-        in_channels=13, hidden_channels=64, num_conv_layers=32, num_fc_layers=8
+        in_channels=13, hidden_channels=128, num_conv_layers=8, num_fc_layers=3
     ).to(device)
     # model = GATEdgeClassifier(
     #     in_channels=13,
@@ -62,9 +75,14 @@ if __name__ == "__main__":
     # initialize weights
     model.apply(init_xavier_normal)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
-    criterion = gnn.DynamicBCEWithLogitsLoss()
-    # on plateau scheduler
+    # Compute global pos_weight and define the loss function
+    print("Computing global pos_weight... ", end="")
+    pos_weight = compute_global_pos_weight(train_loader)
+    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weight, device=device))
+    print(f"{pos_weight:.4f}")
+
+    # Optimizer and scheduler
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         mode="min",
