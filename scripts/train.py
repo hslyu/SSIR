@@ -38,6 +38,8 @@ if __name__ == "__main__":
         shuffle=True,
         collate_fn=graph_collate_fn,
         num_workers=16,
+        pin_memory=True,
+        persistent_workers=True,
     )
     test_loader = DataLoader(
         test_dataset,
@@ -45,6 +47,8 @@ if __name__ == "__main__":
         shuffle=False,
         collate_fn=graph_collate_fn,
         num_workers=16,
+        pin_memory=True,
+        persistent_workers=True,
     )
 
     # Initialize model:
@@ -66,17 +70,16 @@ if __name__ == "__main__":
     # initialize weights
     model.apply(init_xavier_normal)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=2e-4)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.5)
-    criterion = FocalLoss(alpha=0.98)
 
-    num_epochs = 200
+    num_epochs = 500
     best_score = float("inf")
     for epoch in range(1, num_epochs + 1):
         print(f"Epoch {epoch}/{num_epochs}")
-        train_loss = train(model, train_loader, optimizer, criterion, device)
+        train_loss = train(model, train_loader, optimizer, device)
         test_loss, test_acc, acc_0, acc_1, f1 = evaluate(
-            model, test_loader, criterion, device, threshold=0.5
+            model, test_loader, device, threshold=0.5
         )
         print(
             f"Train Loss: {train_loss:.2f}, Test Loss: {test_loss:.2f}, Test Acc: {test_acc:.2f}, "

@@ -332,7 +332,7 @@ def compute_class_balance(targets):
     return negatives / positives
 
 
-def train(model, dataloader, optimizer, criterion, device):
+def train(model, dataloader, optimizer, device):
     model.train()
     total_loss = 0
     progress_bar = tqdm(dataloader, desc="Train", leave=False)
@@ -377,7 +377,7 @@ def train(model, dataloader, optimizer, criterion, device):
 #     return total_loss / len(dataloader)
 
 
-def evaluate(model, dataloader, criterion, device, threshold=0.5):
+def evaluate(model, dataloader, device, threshold=0.5):
     model.eval()
     total_loss = 0
     all_preds = []
@@ -388,7 +388,14 @@ def evaluate(model, dataloader, criterion, device, threshold=0.5):
             data_batch = data_batch.to(device)
             logits = model(data_batch)
             targets = compute_edge_targets(data_batch)
-            loss = criterion(logits, targets)
+            pos_weight_value = compute_class_balance(targets)
+            # pos_weight는 tensor 형태로 전달, device에 맞춰야 함.
+            pos_weight_tensor = torch.tensor(pos_weight_value, device=device)
+            weighted_criterion = nn.BCEWithLogitsLoss(
+                pos_weight=pos_weight_tensor, reduction="mean"
+            )
+
+            loss = weighted_criterion(logits, targets)
             total_loss += loss.item()
             preds = (torch.sigmoid(logits) > threshold).float()
             all_preds.append(preds.cpu())
@@ -477,7 +484,7 @@ if __name__ == "__main__":
         print(f"Epoch {epoch}/{num_epochs}")
         train_loss = train(model, train_loader, optimizer, criterion, device)
         test_loss, test_acc, acc_0, acc_1, f1 = evaluate(
-            model, test_loader, criterion, device, threshold=0.5
+            model, test_loader, device, threshold=0.5
         )
         print(
             f"Train Loss: {train_loss:.3f} | Test Loss: {test_loss:.3f} | Test Acc: {test_acc:.3f} | Acc 0: {acc_0:.3f} | Acc 1: {acc_1:.3f} | F1: {f1:.3f}"
