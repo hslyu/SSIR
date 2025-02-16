@@ -4,10 +4,10 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from torch.serialization import add_safe_globals
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
 from torch_geometric.data import Batch, storage
 from torch_geometric.data.data import DataEdgeAttr, DataTensorAttr
-from torch_geometric.nn import GATConv, GCNConv
+from torch_geometric.nn import GATConv, GCNConv, NNConv
 from tqdm import tqdm
 
 add_safe_globals([DataEdgeAttr, DataTensorAttr, storage.GlobalStorage])
@@ -16,28 +16,6 @@ add_safe_globals([DataEdgeAttr, DataTensorAttr, storage.GlobalStorage])
 ######################
 # 1. GraphDataset & Collate Function
 ######################
-
-
-class DynamicBCEWithLogitsLoss(nn.Module):
-    def __init__(self, reduction="mean"):
-        super().__init__()
-        self.reduction = reduction
-
-    def forward(self, logits, targets):
-        pos_weight_value = self.compute_class_balance(targets)
-        pos_weight_tensor = torch.tensor(pos_weight_value, device=logits.device)
-        criterion = nn.BCEWithLogitsLoss(
-            pos_weight=pos_weight_tensor, reduction=self.reduction
-        )
-        return criterion(logits, targets)
-
-    def compute_class_balance(self, targets):
-        # targets: [num_edges, 1]
-        positives = targets.sum().item()
-        negatives = targets.numel() - positives
-        if positives == 0:
-            return 1.0
-        return negatives / positives
 
 
 class GraphDataset(Dataset):
@@ -112,6 +90,7 @@ class GATEdgeClassifier(nn.Module):
         heads=16,
         num_attention_layers=4,
         num_linear_layers=3,
+        embedding_channels=32,
         use_residual=True,
     ):
         """
@@ -121,150 +100,177 @@ class GATEdgeClassifier(nn.Module):
             heads (int): Number of attention heads.
             num_attention_layers (int): Number of GATConv layers.
             num_linear_layers (int): Number of linear layers in the edge classifier.
-            use_residual (bool): Whether to add residual connections.
+            embedding_channels (int): Output channels for NNConv edge embedding.
+            use_residual (bool): Whether to use residual connections.
         """
         super(GATEdgeClassifier, self).__init__()
         self.use_residual = use_residual
 
-        # Build attention (GATConv) layers.
-        self.att_layers = nn.ModuleList()
-        # First layer: in_channels -> hidden_channels.
-        self.att_layers.append(
-            GATConv(in_channels, hidden_channels, heads=heads, concat=False)
+        # Build NNConv layer for edge embeddings.
+        edge_nn = nn.Sequential(
+            nn.Linear(3, 8),
+            nn.ReLU(),
+            nn.Linear(8, in_channels * embedding_channels),
         )
-        # Subsequent layers: hidden_channels -> hidden_channels.
+        self.nn_conv = NNConv(in_channels, embedding_channels, edge_nn, aggr="add")
+
+        # Build attention layers.
+        self.att_layers = nn.ModuleList()
+        # First attention layer: embedding_channels -> hidden_channels.
+        self.att_layers.append(
+            GATConv(embedding_channels, hidden_channels, heads=heads, concat=False)
+        )
+        # Subsequent attention layers: hidden_channels -> hidden_channels.
         for _ in range(num_attention_layers - 1):
             self.att_layers.append(
                 GATConv(hidden_channels, hidden_channels, heads=heads, concat=False)
             )
 
-        # For residual connection in the first layer, if dimensions differ.
+        # For residual connection in the first attention layer, if dimensions differ.
         if use_residual and in_channels != hidden_channels:
             self.att_residual_proj = nn.Linear(in_channels, hidden_channels)
         else:
             self.att_residual_proj = None
 
-        # Build linear layers for edge classification.
-        self.linear_layers = nn.ModuleList()
+        # Build MLP layers for edge classification.
+        self.mlp_layers = nn.ModuleList()
         if num_linear_layers == 1:
-            self.linear_layers.append(nn.Linear(2 * hidden_channels, 1))
+            self.mlp_layers.append(nn.Linear(2 * hidden_channels, 1))
         else:
             # First linear layer: 2*hidden_channels -> hidden_channels.
-            self.linear_layers.append(nn.Linear(2 * hidden_channels, hidden_channels))
-            # Intermediate linear layers: hidden_channels -> hidden_channels.
+            self.mlp_layers.append(nn.Linear(2 * hidden_channels, hidden_channels))
+            # Intermediate linear layers.
             for _ in range(num_linear_layers - 2):
-                self.linear_layers.append(nn.Linear(hidden_channels, hidden_channels))
+                self.mlp_layers.append(nn.Linear(hidden_channels, hidden_channels))
             # Final linear layer: hidden_channels -> 1.
-            self.linear_layers.append(nn.Linear(hidden_channels, 1))
+            self.mlp_layers.append(nn.Linear(hidden_channels, 1))
 
     def forward(self, data):
-        x, edge_index = data.x, data.edge_index
+        x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
 
-        # Process through attention layers with optional residuals.
-        for idx, att in enumerate(self.att_layers):
-            x_prev = x
-            x = att(x, edge_index)
+        # Compute edge embeddings.
+        x = self.nn_conv(x, edge_index, edge_attr)
+        x = F.relu(x)
+
+        # Apply attention layers with residual connections.
+        for idx, layer in enumerate(self.att_layers):
+            identity = x
+            x = layer(x, edge_index)
             if self.use_residual:
+                # For the first layer, apply projection if needed.
                 if idx == 0 and self.att_residual_proj is not None:
-                    x = x + self.att_residual_proj(x_prev)
-                elif idx > 0:
-                    x = x + x_prev
-            x = F.elu(x)
+                    identity = self.att_residual_proj(identity)
+                if identity.shape == x.shape:
+                    x = F.relu(x + identity)
+                else:
+                    x = F.relu(x)
+            else:
+                x = F.relu(x)
 
-        # For each edge, concatenate the source and target node embeddings.
+        # Concatenate node embeddings for each edge.
         row, col = edge_index
         edge_repr = torch.cat([x[row], x[col]], dim=1)
 
-        # Process through linear layers with residuals on intermediate layers.
-        for idx, linear in enumerate(self.linear_layers):
-            if idx < len(self.linear_layers) - 1:
-                out = linear(edge_repr)
-                # Apply residual connection if dimensions match.
+        # Apply MLP layers with residual connections on intermediate layers.
+        for idx, layer in enumerate(self.mlp_layers):
+            out = layer(edge_repr)
+            if idx < len(self.mlp_layers) - 1:
                 if self.use_residual and out.shape == edge_repr.shape:
                     edge_repr = F.relu(out + edge_repr)
                 else:
                     edge_repr = F.relu(out)
             else:
-                edge_repr = linear(edge_repr)
-        logits = edge_repr
-        return logits
+                edge_repr = out
+
+        return edge_repr
 
 
 class GCNEdgeClassifier(nn.Module):
     def __init__(
         self,
-        in_channels,
-        hidden_channels,
+        in_channels=13,
+        hidden_channels=128,
         num_conv_layers=8,
         num_fc_layers=3,
+        embedding_channels=32,
+        use_residual=True,
     ):
         """
         Args:
-            in_channels (int): Dimension of input node features.
-            hidden_channels (int): Hidden dimension used in GCNConv and MLP layers.
+            in_channels (int): Input node feature dimension.
+            hidden_channels (int): Hidden dimension for GCNConv and MLP.
             num_conv_layers (int): Total number of convolutional layers.
             num_fc_layers (int): Total number of fully connected layers for edge classification.
+            embedding_channels (int): Output channels for NNConv edge embedding.
+            use_residual (bool): Whether to use residual connections.
         """
         super(GCNEdgeClassifier, self).__init__()
+        self.use_residual = use_residual
 
-        # Create a list of GCNConv layers.
-        # The first conv layer maps from in_channels to hidden_channels without a residual connection.
-        # Subsequent conv layers map from hidden_channels to hidden_channels and use residual connections.
-        self.convs = nn.ModuleList()
-        self.convs.append(GCNConv(in_channels, hidden_channels))
+        # Build NNConv layer for edge embeddings.
+        edge_nn = nn.Sequential(
+            nn.Linear(3, 8),
+            nn.ReLU(),
+            nn.Linear(8, in_channels * embedding_channels),
+        )
+        self.nn_conv = NNConv(in_channels, embedding_channels, edge_nn, aggr="add")
+
+        # Build GCNConv layers.
+        self.conv_layers = nn.ModuleList()
+        # First conv layer: embedding_channels -> hidden_channels.
+        self.conv_layers.append(GCNConv(embedding_channels, hidden_channels))
+        # Subsequent conv layers: hidden_channels -> hidden_channels.
         for _ in range(num_conv_layers - 1):
-            self.convs.append(GCNConv(hidden_channels, hidden_channels))
+            self.conv_layers.append(GCNConv(hidden_channels, hidden_channels))
 
-        # Build fully connected layers for edge classification.
-        # Input dimension for the first FC layer is 2 * hidden_channels because we concatenate
-        # the embeddings of the two nodes forming an edge.
-        self.fcs = nn.ModuleList()
+        # Build MLP layers for edge classification.
+        self.mlp_layers = nn.ModuleList()
         if num_fc_layers == 1:
-            # Single layer directly mapping to the output logit.
-            self.fcs.append(nn.Linear(2 * hidden_channels, 1))
+            self.mlp_layers.append(nn.Linear(2 * hidden_channels, 1))
         else:
-            # First FC layer.
-            self.fcs.append(nn.Linear(2 * hidden_channels, hidden_channels))
+            # First FC layer: 2*hidden_channels -> hidden_channels.
+            self.mlp_layers.append(nn.Linear(2 * hidden_channels, hidden_channels))
             # Intermediate FC layers.
             for _ in range(num_fc_layers - 2):
-                self.fcs.append(nn.Linear(hidden_channels, hidden_channels))
-            # Final FC layer mapping to a single logit.
-            self.fcs.append(nn.Linear(hidden_channels, 1))
+                self.mlp_layers.append(nn.Linear(hidden_channels, hidden_channels))
+            # Final FC layer: hidden_channels -> 1.
+            self.mlp_layers.append(nn.Linear(hidden_channels, 1))
 
     def forward(self, data):
-        """
-        Args:
-            data (torch_geometric.data.Data or Batch):
-                x: [num_nodes, in_channels] - Node features.
-                edge_index: [2, num_edges] - Graph connectivity.
-        Returns:
-            logits: [num_edges, 1] – Logit value for each edge.
-        """
-        x, edge_index = data.x, data.edge_index
+        x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
 
-        # Apply the first conv layer (without residual connection) followed by ReLU.
-        x = self.convs[0](x, edge_index)
+        # Compute edge embeddings.
+        x = self.nn_conv(x, edge_index, edge_attr)
         x = F.relu(x)
 
-        # Apply the remaining conv layers with residual connections.
-        for conv in self.convs[1:]:
-            identity = x  # Save the current features for the residual connection.
-            out = conv(x, edge_index)
-            x = F.relu(out + identity)
+        # Apply GCNConv layers with residual connections.
+        for idx, layer in enumerate(self.conv_layers):
+            identity = x
+            x = layer(x, edge_index)
+            if self.use_residual and idx > 0:
+                if identity.shape == x.shape:
+                    x = F.relu(x + identity)
+                else:
+                    x = F.relu(x)
+            else:
+                x = F.relu(x)
 
-        # For each edge, concatenate the source and target node embeddings.
+        # Concatenate node embeddings for each edge.
         row, col = edge_index
         edge_repr = torch.cat([x[row], x[col]], dim=1)
 
-        # Pass the concatenated edge features through the fully connected layers.
-        for i, fc in enumerate(self.fcs):
-            edge_repr = fc(edge_repr)
-            # Apply ReLU activation for all layers except the final layer.
-            if i < len(self.fcs) - 1:
-                edge_repr = F.relu(edge_repr)
+        # Apply MLP layers with residual connections on intermediate layers.
+        for idx, layer in enumerate(self.mlp_layers):
+            out = layer(edge_repr)
+            if idx < len(self.mlp_layers) - 1:
+                if self.use_residual and out.shape == edge_repr.shape:
+                    edge_repr = F.relu(out + edge_repr)
+                else:
+                    edge_repr = F.relu(out)
+            else:
+                edge_repr = out
 
-        logits = edge_repr
-        return logits
+        return edge_repr
 
 
 ######################
