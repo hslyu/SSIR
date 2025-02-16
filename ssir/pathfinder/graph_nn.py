@@ -13,58 +13,31 @@ from tqdm import tqdm
 add_safe_globals([DataEdgeAttr, DataTensorAttr, storage.GlobalStorage])
 
 
-class FocalLoss(nn.Module):
-    """
-    Implementation of standard Focal Loss for binary classification.
-    For samples with label 1 (positive class), the loss is weighted by alpha,
-    and for samples with label 0 (negative class), the loss is weighted by (1 - alpha).
-    """
+######################
+# 1. GraphDataset & Collate Function
+######################
 
-    def __init__(self, alpha=0.25, gamma=3.0, reduction="mean"):
-        """
-        Args:
-            alpha (float): Weighting factor for the positive class.
-            gamma (float): Focusing parameter to down-weight easy examples.
-            reduction (str): Specifies the reduction to apply to the output: 'mean', 'sum', or 'none'.
-        """
-        super(FocalLoss, self).__init__()
-        self.alpha = alpha
-        self.gamma = gamma
+
+class DynamicBCEWithLogitsLoss(nn.Module):
+    def __init__(self, reduction="mean"):
+        super().__init__()
         self.reduction = reduction
 
     def forward(self, logits, targets):
-        """
-        Args:
-            logits: Predicted logits from the model (before applying sigmoid).
-            targets: Ground truth binary labels (0 or 1).
-        Returns:
-            Computed focal loss.
-        """
-        # Compute binary cross entropy loss without reduction
-        bce_loss = F.binary_cross_entropy_with_logits(logits, targets, reduction="none")
+        pos_weight_value = self.compute_class_balance(targets)
+        pos_weight_tensor = torch.tensor(pos_weight_value, device=logits.device)
+        criterion = nn.BCEWithLogitsLoss(
+            pos_weight=pos_weight_tensor, reduction=self.reduction
+        )
+        return criterion(logits, targets)
 
-        # Apply sigmoid to get probabilities
-        probs = torch.sigmoid(logits)
-
-        # Compute probability for the true class: p if label=1, (1-p) if label=0
-        pt = torch.where(targets == 1, probs, 1 - probs)
-
-        # Compute focal weight factor
-        focal_weight = (1 - pt) ** self.gamma
-
-        # Compute alpha factor: alpha for positive class and (1 - alpha) for negative class
-        alpha_factor = torch.where(targets == 1, self.alpha, 1 - self.alpha)
-
-        # Combine factors with BCE loss
-        loss = alpha_factor * focal_weight * bce_loss
-
-        # Apply reduction method
-        if self.reduction == "mean":
-            return loss.mean()
-        elif self.reduction == "sum":
-            return loss.sum()
-        else:
-            return loss
+    def compute_class_balance(self, targets):
+        # targets: [num_edges, 1]
+        positives = targets.sum().item()
+        negatives = targets.numel() - positives
+        if positives == 0:
+            return 1.0
+        return negatives / positives
 
 
 class GraphDataset(Dataset):
@@ -219,7 +192,11 @@ class GATEdgeClassifier(nn.Module):
 
 class GCNEdgeClassifier(nn.Module):
     def __init__(
-        self, in_channels, hidden_channels, num_conv_layers=8, num_fc_layers=3
+        self,
+        in_channels,
+        hidden_channels,
+        num_conv_layers=8,
+        num_fc_layers=3,
     ):
         """
         Args:
@@ -323,16 +300,7 @@ def compute_edge_targets(data_batch):
 ######################
 
 
-def compute_class_balance(targets):
-    # targets: [num_edges, 1]
-    positives = targets.sum().item()
-    negatives = targets.numel() - positives
-    if positives == 0:
-        return 1.0
-    return negatives / positives
-
-
-def train(model, dataloader, optimizer, device):
+def train(model, dataloader, criterion, optimizer, device):
     model.train()
     total_loss = 0
     progress_bar = tqdm(dataloader, desc="Train", leave=False)
@@ -341,15 +309,7 @@ def train(model, dataloader, optimizer, device):
         optimizer.zero_grad()
         logits = model(data_batch)  # [num_edges, 1]
         targets = compute_edge_targets(data_batch)
-
-        pos_weight_value = compute_class_balance(targets)
-        # pos_weight는 tensor 형태로 전달, device에 맞춰야 함.
-        pos_weight_tensor = torch.tensor(pos_weight_value, device=device)
-        weighted_criterion = nn.BCEWithLogitsLoss(
-            pos_weight=pos_weight_tensor, reduction="mean"
-        )
-
-        loss = weighted_criterion(logits, targets)
+        loss = criterion(logits, targets)
         loss.backward()
         optimizer.step()
         total_loss += loss.item()
@@ -358,26 +318,7 @@ def train(model, dataloader, optimizer, device):
     return total_loss / len(dataloader)
 
 
-# def train(model, dataloader, optimizer, criterion, device):
-#     model.train()
-#     total_loss = 0
-#     progress_bar = tqdm(dataloader, desc="Train", leave=False)
-#     for data_batch in progress_bar:
-#         data_batch = data_batch.to(device)
-#         optimizer.zero_grad()
-#         logits = model(data_batch)  # [num_edges, 1]
-#         targets = compute_edge_targets(data_batch)
-#
-#         loss = criterion(logits, targets)
-#         loss.backward()
-#         optimizer.step()
-#         total_loss += loss.item()
-#         progress_bar.set_postfix(loss=f"{loss.item():.4f}")
-#
-#     return total_loss / len(dataloader)
-
-
-def evaluate(model, dataloader, device, threshold=0.5):
+def evaluate(model, dataloader, criterion, device, threshold=0.5):
     model.eval()
     total_loss = 0
     all_preds = []
@@ -388,14 +329,7 @@ def evaluate(model, dataloader, device, threshold=0.5):
             data_batch = data_batch.to(device)
             logits = model(data_batch)
             targets = compute_edge_targets(data_batch)
-            pos_weight_value = compute_class_balance(targets)
-            # pos_weight는 tensor 형태로 전달, device에 맞춰야 함.
-            pos_weight_tensor = torch.tensor(pos_weight_value, device=device)
-            weighted_criterion = nn.BCEWithLogitsLoss(
-                pos_weight=pos_weight_tensor, reduction="mean"
-            )
-
-            loss = weighted_criterion(logits, targets)
+            loss = criterion(logits, targets)
             total_loss += loss.item()
             preds = (torch.sigmoid(logits) > threshold).float()
             all_preds.append(preds.cpu())
@@ -434,64 +368,3 @@ def evaluate(model, dataloader, device, threshold=0.5):
 
     avg_loss = total_loss / len(dataloader)
     return avg_loss, total_accuracy, accuracy_0, accuracy_1, f1
-
-
-######################
-# 5. Main Execution Block: Prepare Dataset, Initialize Model, and Run Training Loop
-######################
-if __name__ == "__main__":
-    # Dataset directory (modify to the actual path)
-    root_dir = "../../scripts/results_pt"
-    dataset = GraphDataset(root_dir, total_files=2000)
-
-    # Split the dataset into train and test sets (e.g., 80% training, 20% test)
-    train_size = 10
-    test_size = len(dataset) - train_size
-    train_dataset, test_dataset = torch.utils.data.random_split(
-        dataset, [train_size, test_size]
-    )
-
-    # Create DataLoaders
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=256,
-        shuffle=True,
-        collate_fn=graph_collate_fn,
-        num_workers=16,
-    )
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=256,
-        shuffle=False,
-        collate_fn=graph_collate_fn,
-        num_workers=16,
-    )
-
-    # Initialize model:
-    # - in_channels: Dimension of node features (e.g., 13)
-    # - hidden_channels: Hidden dimension (e.g., 32)
-    in_channels = 13  # Modify according to your data
-    hidden_channels = 32  # Modify according to your data
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # model = GCNEdgeClassifier(in_channels, hidden_channels).to(device)
-    model = GATEdgeClassifier(in_channels, hidden_channels).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
-    criterion = nn.BCEWithLogitsLoss()
-
-    num_epochs = 50
-    for epoch in range(1, num_epochs + 1):
-        print(f"Epoch {epoch}/{num_epochs}")
-        train_loss = train(model, train_loader, optimizer, criterion, device)
-        test_loss, test_acc, acc_0, acc_1, f1 = evaluate(
-            model, test_loader, device, threshold=0.5
-        )
-        print(
-            f"Train Loss: {train_loss:.3f} | Test Loss: {test_loss:.3f} | Test Acc: {test_acc:.3f} | Acc 0: {acc_0:.3f} | Acc 1: {acc_1:.3f} | F1: {f1:.3f}"
-        )
-        # test_loss, test_acc = evaluate(
-        #     model, test_loader, criterion, device, threshold=0.5
-        # )
-        # print(
-        #     f"Train Loss: {train_loss:.4f} | Test Loss: {test_loss:.4f} | Test Acc: {test_acc:.4f}"
-        # )
