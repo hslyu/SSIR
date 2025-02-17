@@ -698,16 +698,18 @@ class IABRelayGraph:
     def to_torch_geometric(self):
         """
         Convert the graph to a torch_geometric.data.Data object.
+        Assumes that node_id increases sequentially from 0.
         """
-        # Create a mapping from node ID to index
-        node_idx_map = {}
+        # Create a list of node features (using node_id as the index)
+        # Ensure that nodes are processed in sorted order by node_id
+        sorted_node_ids = sorted(self.nodes.keys())
         node_features = []
-        for idx, (node_id, node) in enumerate(self.nodes.items()):
-            node_idx_map[node_id] = idx
-            # Initialize feature with an empty array
+        for node_id in sorted_node_ids:
+            node = self.nodes[node_id]
+            # Initialize an empty feature array
             feature = np.empty(0, dtype=np.float32)
 
-            # Concatenate the node type into the feature
+            # Append the node type to the feature
             if node_id == 0:
                 feature = np.append(feature, 0)
             elif isinstance(node, User):
@@ -715,7 +717,7 @@ class IABRelayGraph:
             else:  # BaseStation
                 feature = np.append(feature, 2)
 
-            # Concatenate the node position into the feature
+            # Append the node position to the feature
             feature = np.concatenate((feature, node.get_position()))
             # Append additional attributes based on the node type
             if isinstance(node, User):
@@ -740,7 +742,7 @@ class IABRelayGraph:
                 )
             node_features.append(feature)
 
-        # Prepare lists for edge indices and edge features
+        # Create lists for edge indices and edge features
         edge_index = []
         edge_features = []
         for from_node_id, neighbors in self.adjacency_list.items():
@@ -749,7 +751,7 @@ class IABRelayGraph:
                 to_node = self.nodes[to_node_id]
                 # Compute the distance between nodes
                 distance = from_node.get_distance(to_node)
-                # Compute additional edge features based on from_node type
+                # Compute additional edge features based on the type of the from_node
                 if isinstance(from_node, BaseStation):
                     from_node._set_transmission_and_jamming_power_density()
                     snr = from_node._compute_snr(to_node)
@@ -759,10 +761,8 @@ class IABRelayGraph:
                     )
                 else:  # User
                     edge_feat = np.array([distance, 0.0, 0.0], dtype=np.float32)
-                # Append edge index (using node indices) and edge features
-                edge_index.append(
-                    [node_idx_map[from_node_id], node_idx_map[to_node_id]]
-                )
+                # Append edge index using the original node_id
+                edge_index.append([from_node_id, to_node_id])
                 edge_features.append(edge_feat)
 
         # Convert lists to torch tensors
