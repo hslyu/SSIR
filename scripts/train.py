@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+from torch_geometric.loader import DataLoader
 
 import ssir.pathfinder.graph_nn as gnn
 
@@ -15,10 +15,10 @@ def init_xavier_normal(module):
 def compute_global_pos_weight(dataloader):
     total_edges = 0
     total_positives = 0
-    # 전체 학습 데이터를 순회하며 전체 edge 통계를 계산
-    for data_batch in dataloader:
-        # data_batch는 현재 CPU 메모리 상에 있음
-        targets = gnn.compute_edge_targets(data_batch)  # [num_edges, 1]
+    # Compute the global pos_weight for the BCEWithLogitsLoss
+    for batch in dataloader:
+        data, label = batch
+        targets = gnn.compute_edge_targets(batch)  # [num_edges, 1]
         total_positives += targets.sum().item()
         total_edges += targets.numel()
     negatives = total_edges - total_positives
@@ -41,7 +41,6 @@ if __name__ == "__main__":
         train_dataset,
         batch_size=512,
         shuffle=True,
-        collate_fn=gnn.graph_collate_fn,
         num_workers=16,
         pin_memory=True,
         persistent_workers=True,
@@ -50,7 +49,6 @@ if __name__ == "__main__":
         test_dataset,
         batch_size=512,
         shuffle=False,
-        collate_fn=gnn.graph_collate_fn,
         num_workers=16,
         pin_memory=True,
         persistent_workers=True,
@@ -61,16 +59,16 @@ if __name__ == "__main__":
     # - hidden_channels: Hidden dimension (e.g., 32)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # model = gnn.GCNEdgeClassifier(
-    #     in_channels=13, hidden_channels=128, num_conv_layers=8, num_fc_layers=3
-    # ).to(device)
-    model = gnn.GATEdgeClassifier(
-        in_channels=13,
-        hidden_channels=16,
-        heads=3,
-        num_attention_layers=8,
-        num_linear_layers=3,
+    model = gnn.GCNEdgeClassifier(
+        in_channels=13, hidden_channels=64, num_conv_layers=8, num_fc_layers=3
     ).to(device)
+    # model = gnn.GATEdgeClassifier(
+    #     in_channels=13,
+    #     hidden_channels=16,
+    #     heads=3,
+    #     num_attention_layers=8,
+    #     num_linear_layers=3,
+    # ).to(device)
 
     # initialize weights
     model.apply(init_xavier_normal)
