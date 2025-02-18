@@ -47,15 +47,17 @@ def run_experiment(exp_index, progress_queue):
 
         # Genetic algorithm
         graph_genetic, _ = genetic.get_solution_graph(graph)
-        graph_genetic.save_graph(os.path.join(parent_dir, "graph_genetic.pkl"))
+        if graph_genetic is not None:
+            graph_genetic.save_graph(os.path.join(parent_dir, "graph_genetic.pkl"))
     except Exception as e:
         error_list.append(f"Error in experiment {exp_index}: {e}")
     progress_queue.put(1)
 
 
 # %%
-num_experiments = 10000
-num_workers = 16
+start = 0
+num_experiments = 20000
+num_workers = 30
 
 # 진행률 표시를 위한 큐와 tqdm 설정
 manager = multiprocessing.Manager()
@@ -77,7 +79,7 @@ progress_process.start()
 with multiprocessing.Pool(processes=num_workers) as pool:
     pool.starmap(
         run_experiment,
-        [(i, progress_queue) for i in range(10000, num_experiments + 10000)],
+        [(i, progress_queue) for i in range(start, num_experiments + start)],
     )
 
 # 진행률 업데이트 종료
