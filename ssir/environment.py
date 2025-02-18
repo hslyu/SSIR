@@ -6,6 +6,7 @@ from typing import List, Optional, Union
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
+import shapely.vectorized as sv
 from shapely.geometry import Point, box
 from shapely.ops import nearest_points
 
@@ -44,7 +45,7 @@ def generate_config(exp_index):
         "num_ground_basestations": random.randint(60, 80),
         "num_haps_basestations": random.randint(15, 20),
         "num_leo_basestations": random.randint(10, 15),
-        "num_users": random.randint(30, 60),
+        "num_users": random.randint(40, 60),
         "random_seed": exp_index,
     }
     config.update(map_list[exp_index % len(map_list)])
@@ -266,34 +267,18 @@ class DataManager:
         for user in graph.users:
             path = pf.astar.get_shortest_path(predecessors, user.get_id())
             if path[0] == -1:
-                graph.remove_node(user.get_id())
-
-        # # Determine users are connected to at least one basestation
-        # for user in graph.users:
-        #     if len(user.get_parent()) == 0:
-        #         while True:
-        #             user._position = np.array(
-        #                 [
-        #                     random.uniform(*self.longitude_range),
-        #                     random.uniform(*self.latitude_range),
-        #                     0,
-        #                 ]
-        #             )
-        #             graph.connect_reachable_nodes()
-        #             if len(user.get_parent()) > 0:
-        #                 break
-
-        # Determine whether the source is connected to sufficient number of basestations
-        source = graph.nodes[0]
-        while len(source.get_children()) < 3:
-            source._position = np.array(
-                [
-                    random.uniform(*self.longitude_range),
-                    random.uniform(*self.latitude_range),
-                    0,
-                ]
-            )
-            graph.connect_reachable_nodes()
+                while True:
+                    user._position = np.array(
+                        [
+                            random.uniform(*self.longitude_range),
+                            random.uniform(*self.latitude_range),
+                            0,
+                        ]
+                    )
+                    graph.connect_reachable_nodes()
+                    if user.has_parent():
+                        break
+                # graph.remove_node(user.get_id())
 
         source = graph.nodes[0]
         while len(source.get_children()) < 3:
@@ -303,6 +288,18 @@ class DataManager:
             source._position = np.array(
                 [source_basestation_point[0].x, source_basestation_point[0].y, 0]
             )
+            graph.connect_reachable_nodes(target_node_id=0)
+
+        # Rearrange node id to be consecutive
+        graph.reset()
+        all_nodes = graph.nodes.values()
+        graph.nodes = {}
+        graph.users = []
+        graph.basestations = []
+        for i, node in enumerate(all_nodes):
+            node._node_id = i
+            graph.add_node(node)
+        graph.connect_reachable_nodes()
 
         return graph
 

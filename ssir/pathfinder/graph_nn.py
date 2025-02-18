@@ -28,8 +28,8 @@ class GraphDataset(Dataset):
         """
         self.root_dir = root_dir
         self.file_list = []
-        # Iterate from 1 to total_files and add only the files that exist to the list.
-        for i in range(1, total_files + 1):
+        # Iterate from 0 to total_files - 1 and add only the files that exist to the list.
+        for i in range(total_files):
             file_path = os.path.join(root_dir, f"{i}.pt")
             if os.path.isfile(file_path):
                 self.file_list.append(file_path)
@@ -38,7 +38,14 @@ class GraphDataset(Dataset):
         self.preload = preload
         if self.preload:
             print("Preloading files into memory...")
-            self.data = [torch.load(fp) for fp in self.file_list]
+            self.data = []
+            for fp in self.file_list:
+                # Load data and label from file
+                data, label = torch.load(fp)
+                # Store label edge_index as an attribute in data
+                # Compute edge_label attribute and store in data
+                data.edge_label = self.compute_edge_label(data, label)
+                self.data.append(data)
             print("File loading complete.")
 
     def __len__(self):
@@ -50,33 +57,35 @@ class GraphDataset(Dataset):
         else:
             file_path = self.file_list[idx]
             data, label = torch.load(file_path)
-            return data, label
+            data.file_path = file_path
+            data.edge_label = self.compute_edge_label(data, label)
+            return data
 
+    def compute_edge_label(self, data, label):
+        """
+        For each edge in the data graph, compute whether it exists in the label graph.
+        If an edge in data.edge_index is present in label.edge_index, its label is 1.0; otherwise 0.0.
+        """
+        device = data.x.device
+        num_nodes = data.x.size(0)
+        multiplier = (
+            num_nodes + 1
+        )  # Multiplier greater than the maximum number of nodes
 
-def graph_collate_fn(batch):
-    """
-    각 샘플이 (data, label) 형태로 주어질 때,
-    data에 label.edge_index를 복사한 뒤, Batch.from_data_list로 병합한다.
-    단, 각 샘플별 노드 재매핑(offset)을 고려하여 label_edge_index도 합친다.
-    """
-    data_list, label_list = zip(*batch)
-    # 각 data에 label.edge_index 필드를 임시로 저장
-    for data, label in zip(data_list, label_list):
-        data.label_edge_index = label.edge_index
-    # data 객체를 Batch로 합침 (여기서 x, edge_index 등은 자동 re-indexing됨)
-    batched_data = Batch.from_data_list(data_list)
+        # Compute keys for data edges using local node indices
+        data_u = data.edge_index[0]
+        data_v = data.edge_index[1]
+        data_keys = data_u * multiplier + data_v
 
-    # 각 샘플별로 label_edge_index에 재매핑(offset)을 직접 적용
-    label_edge_index_list = []
-    offset = 0
-    for data in data_list:
-        # data.x의 노드 수 만큼 offset 적용
-        # data.label_edge_index: [2, num_edges] (원래 sample 내 인덱스)
-        label_edge_index_list.append(data.label_edge_index + offset)
-        offset += data.x.size(0)
-    batched_data.label_edge_index = torch.cat(label_edge_index_list, dim=1)
+        # Compute keys for label edges using local node indices
+        label_u = label.edge_index[0]
+        label_v = label.edge_index[1]
+        label_keys = label_u * multiplier + label_v
 
-    return batched_data
+        # Check whether each data edge key exists in the label edge keys
+        isin = torch.isin(data_keys, label_keys)
+        edge_label = isin.float().view(-1, 1)
+        return edge_label
 
 
 ######################
@@ -263,50 +272,32 @@ class GCNEdgeClassifier(nn.Module):
 
 
 ######################
-# 3. Functions to Compute Edge Targets
-######################
-def compute_edge_targets(data_batch):
-    """
-    batched_data에 대해, data.edge_index와 data_batch.label_edge_index를 이용하여
-    각 edge가 label에도 존재하는지 판단하는 타겟 벡터를 생성한다.
-    """
-    device = data_batch.x.device
-    # 전체 노드 수보다 큰 multiplier 선택
-    max_nodes = data_batch.x.size(0)
-    multiplier = max_nodes + 1
-
-    # data edge key 생성
-    data_u = data_batch.edge_index[0]
-    data_v = data_batch.edge_index[1]
-    data_keys = data_u * multiplier + data_v
-
-    # label edge key 생성 (label_edge_index는 이미 re-indexed 되어 있음)
-    label_u = data_batch.label_edge_index[0]
-    label_v = data_batch.label_edge_index[1]
-    label_keys = label_u * multiplier + label_v
-
-    isin = torch.isin(data_keys, label_keys)
-    targets = isin.float().view(-1, 1)
-    return targets
-
-
-######################
 # 4. Training & Evaluation Functions
 ######################
 
 
 def train(model, dataloader, criterion, optimizer, device):
+    """
+    Train the model using DataBatch directly.
+    The model is applied to the entire batch, which contains a concatenated edge_label attribute.
+    """
     model.train()
     total_loss = 0
     progress_bar = tqdm(dataloader, desc="Train", leave=False)
-    for data_batch in progress_bar:
-        data_batch = data_batch.to(device)
+
+    for batch in progress_bar:
+        # Move the entire batch to the device
+        batch = batch.to(device)
         optimizer.zero_grad()
-        logits = model(data_batch)  # [num_edges, 1]
-        targets = compute_edge_targets(data_batch)
+
+        # Forward pass on the complete DataBatch
+        logits = model(batch)  # Expected shape: [total_edges_in_batch, 1]
+        targets = batch.edge_label  # Expected shape: [total_edges_in_batch, 1]
+
         loss = criterion(logits, targets)
         loss.backward()
         optimizer.step()
+
         total_loss += loss.item()
         progress_bar.set_postfix(loss=f"{loss.item():.4f}")
 
@@ -314,32 +305,45 @@ def train(model, dataloader, criterion, optimizer, device):
 
 
 def evaluate(model, dataloader, criterion, device, threshold=0.5):
+    """
+    Evaluate the model using the entire DataBatch directly.
+    The model processes the concatenated graph batch and uses the pre-computed
+    'edge_label' attribute from the batch for loss and metric computation.
+    """
     model.eval()
     total_loss = 0
     all_preds = []
     all_targets = []
     progress_bar = tqdm(dataloader, desc="Evaluate", leave=False)
+
     with torch.no_grad():
-        for data_batch in progress_bar:
-            data_batch = data_batch.to(device)
-            logits = model(data_batch)
-            targets = compute_edge_targets(data_batch)
+        for batch in progress_bar:
+            # Move the entire batch to the device
+            batch = batch.to(device)
+
+            # Forward pass on the complete DataBatch
+            logits = model(batch)  # Expected shape: [total_edges_in_batch, 1]
+            targets = batch.edge_label  # Expected shape: [total_edges_in_batch, 1]
+
             loss = criterion(logits, targets)
             total_loss += loss.item()
+
             preds = (torch.sigmoid(logits) > threshold).float()
             all_preds.append(preds.cpu())
             all_targets.append(targets.cpu())
+
             progress_bar.set_postfix(loss=f"{loss.item():.4f}")
 
-    all_preds = torch.cat(all_preds)
-    all_targets = torch.cat(all_targets)
+    # Concatenate all predictions and targets along the edge dimension
+    all_preds = torch.cat(all_preds, dim=0)
+    all_targets = torch.cat(all_targets, dim=0)
 
-    # 전체 accuracy 계산
+    # Compute overall accuracy
     total_edges = all_targets.numel()
     total_correct = (all_preds == all_targets).sum().item()
     total_accuracy = total_correct / total_edges if total_edges > 0 else 0
 
-    # 클래스별 accuracy 계산
+    # Compute per-class accuracy
     mask_0 = all_targets == 0
     mask_1 = all_targets == 1
     correct_0 = (all_preds[mask_0] == all_targets[mask_0]).sum().item()
@@ -349,7 +353,7 @@ def evaluate(model, dataloader, criterion, device, threshold=0.5):
     accuracy_0 = correct_0 / total_0 if total_0 > 0 else 0
     accuracy_1 = correct_1 / total_1 if total_1 > 0 else 0
 
-    # F1 score (positive class: 1) 계산
+    # Compute F1 score for the positive class (1)
     TP = ((all_preds == 1) & (all_targets == 1)).sum().item()
     FP = ((all_preds == 1) & (all_targets == 0)).sum().item()
     FN = ((all_preds == 0) & (all_targets == 1)).sum().item()

@@ -6,7 +6,7 @@ import pickle
 from abc import ABC
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import networkx as nx
 import numpy as np
@@ -58,8 +58,8 @@ class BaseStationType(Enum):
         transmit_antenna_gain=25,  # in dBi
         receive_antenna_gain=25,  # in dBi
         antenna_gain_to_noise_temperature=1.5,  # in dB
-        pathloss_exponent=3.2,  # dimensionless
-        eavesdropper_density=1e-4,  # in km^-2
+        pathloss_exponent=2.9,  # dimensionless
+        eavesdropper_density=1.5e-4,  # in km^-2
     )
     GROUND = BaseStationConfig(
         power_capacity=30,  # in dBm
@@ -512,17 +512,27 @@ class IABRelayGraph:
                 else:
                     break
 
-    def connect_reachable_nodes(self, source_node_id: int = 0):
+    def connect_reachable_nodes(
+        self, target_node_id: Optional[int] = None, source_node_id: int = 0
+    ):
         """
         Connects all rechable nodes in the graph.
         """
-        for from_node in self.basestations:
-            from_node_id = from_node.get_id()
-            for to_node_id in self.compute_rechable_nodes(from_node_id):
-                if from_node_id == to_node_id or to_node_id == source_node_id:
+        # Connect all reachable nodes in the graph
+        if target_node_id is None:
+            for from_node in self.basestations:
+                from_node_id = from_node.get_id()
+                for to_node_id in self.compute_rechable_nodes(from_node_id):
+                    if from_node_id == to_node_id or to_node_id == source_node_id:
+                        continue
+                    self.add_edge(from_node_id, to_node_id)
+        else:
+            for to_node_id in self.compute_rechable_nodes(target_node_id):
+                if to_node_id == source_node_id:
                     continue
-                self.add_edge(from_node_id, to_node_id)
+                self.add_edge(target_node_id, to_node_id)
 
+        # Remove the direct connection between the source node and the users
         for node in self.nodes[source_node_id].get_children():
             if isinstance(node, User):
                 self.adjacency_list[source_node_id].remove(node.get_id())
