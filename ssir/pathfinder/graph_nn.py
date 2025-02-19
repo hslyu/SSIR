@@ -84,7 +84,7 @@ class GraphDataset(Dataset):
 
         # Check whether each data edge key exists in the label edge keys
         isin = torch.isin(data_keys, label_keys)
-        edge_label = isin.float().view(-1, 1)
+        edge_label = isin.long()
         return edge_label
 
 
@@ -138,7 +138,7 @@ class GATEdgeClassifier(nn.Module):
         # Build MLP layers for edge classification.
         self.mlp_layers = nn.ModuleList()
         if num_linear_layers == 1:
-            self.mlp_layers.append(nn.Linear(2 * hidden_channels, 1))
+            self.mlp_layers.append(nn.Linear(2 * hidden_channels, 2))
         else:
             # First linear layer: 2*hidden_channels -> hidden_channels.
             self.mlp_layers.append(nn.Linear(2 * hidden_channels, hidden_channels))
@@ -146,7 +146,7 @@ class GATEdgeClassifier(nn.Module):
             for _ in range(num_linear_layers - 2):
                 self.mlp_layers.append(nn.Linear(hidden_channels, hidden_channels))
             # Final linear layer: hidden_channels -> 1.
-            self.mlp_layers.append(nn.Linear(hidden_channels, 1))
+            self.mlp_layers.append(nn.Linear(hidden_channels, 2))
 
     def forward(self, data):
         x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
@@ -186,7 +186,7 @@ class GATEdgeClassifier(nn.Module):
 class GCNEdgeClassifier(nn.Module):
     def __init__(
         self,
-        in_channels=13,
+        in_channels=14,
         hidden_channels=128,
         num_conv_layers=8,
         num_fc_layers=3,
@@ -205,6 +205,7 @@ class GCNEdgeClassifier(nn.Module):
         super(GCNEdgeClassifier, self).__init__()
         self.use_residual = use_residual
 
+        self.edge_attr_bn = nn.BatchNorm1d(3)
         # Build NNConv layer for edge embeddings.
         edge_nn = nn.Sequential(
             nn.Linear(3, 8),
@@ -224,7 +225,7 @@ class GCNEdgeClassifier(nn.Module):
         # Build MLP layers for edge classification.
         self.mlp_layers = nn.ModuleList()
         if num_fc_layers == 1:
-            self.mlp_layers.append(nn.Linear(2 * hidden_channels, 1))
+            self.mlp_layers.append(nn.Linear(2 * hidden_channels, 2))
         else:
             # First FC layer: 2*hidden_channels -> hidden_channels.
             self.mlp_layers.append(nn.Linear(2 * hidden_channels, hidden_channels))
@@ -232,10 +233,11 @@ class GCNEdgeClassifier(nn.Module):
             for _ in range(num_fc_layers - 2):
                 self.mlp_layers.append(nn.Linear(hidden_channels, hidden_channels))
             # Final FC layer: hidden_channels -> 1.
-            self.mlp_layers.append(nn.Linear(hidden_channels, 1))
+            self.mlp_layers.append(nn.Linear(hidden_channels, 2))
 
     def forward(self, data):
         x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
+        edge_attr = self.edge_attr_bn(edge_attr)
 
         # Compute edge embeddings.
         x = self.nn_conv(x, edge_index, edge_attr)
@@ -304,7 +306,7 @@ def train(model, dataloader, criterion, optimizer, device):
     return total_loss / len(dataloader)
 
 
-def evaluate(model, dataloader, criterion, device, threshold=0.5):
+def evaluate(model, dataloader, criterion, device):
     """
     Evaluate the model using the entire DataBatch directly.
     The model processes the concatenated graph batch and uses the pre-computed
@@ -328,7 +330,7 @@ def evaluate(model, dataloader, criterion, device, threshold=0.5):
             loss = criterion(logits, targets)
             total_loss += loss.item()
 
-            preds = (torch.sigmoid(logits) > threshold).float()
+            preds = logits.argmax(dim=1)
             all_preds.append(preds.cpu())
             all_targets.append(targets.cpu())
 

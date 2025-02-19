@@ -17,24 +17,19 @@ def compute_global_pos_weight(dataloader):
     total_positives = 0
     # Compute the global pos_weight for the BCEWithLogitsLoss
     for batch in dataloader:
-        data, label = batch
-        targets = gnn.compute_edge_targets(batch)  # [num_edges, 1]
-        total_positives += targets.sum().item()
-        total_edges += targets.numel()
+        data = batch
+        total_positives += data.edge_label.sum().item()
+        total_edges += data.x.numel()
     negatives = total_edges - total_positives
     return negatives / total_positives if total_positives > 0 else 1.0
 
 
 if __name__ == "__main__":
-    root_dir = "results_pt"
-    dataset = gnn.GraphDataset(root_dir, total_files=50000, preload=False)
-
-    # Split the dataset into train and test sets (e.g., 80% training, 20% test)
-    train_size = int(0.8 * len(dataset))
-    test_size = len(dataset) - train_size
-    train_dataset, test_dataset = torch.utils.data.random_split(
-        dataset, [train_size, test_size]
-    )
+    # Load dataset
+    train_dir = "/fast/hslyu/results_pt/train"
+    test_dir = "/fast/hslyu/results_pt/test"
+    train_dataset = gnn.GraphDataset(train_dir, total_files=40000, preload=False)
+    test_dataset = gnn.GraphDataset(train_dir, total_files=10000, preload=False)
 
     # Create DataLoaders
     train_loader = DataLoader(
@@ -60,7 +55,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model = gnn.GCNEdgeClassifier(
-        in_channels=13, hidden_channels=64, num_conv_layers=8, num_fc_layers=3
+        in_channels=14, hidden_channels=128, num_conv_layers=12, num_fc_layers=3
     ).to(device)
     # model = gnn.GATEdgeClassifier(
     #     in_channels=13,
@@ -75,15 +70,15 @@ if __name__ == "__main__":
 
     # Compute global pos_weight and define the loss function
     print("Computing global pos_weight... ", end="")
-    # pos_weight = compute_global_pos_weight(train_loader)
-    pos_weight = 455.8257
-    criterion = nn.BCEWithLogitsLoss(
-        pos_weight=torch.tensor(pos_weight, device=device), reduction="mean"
-    )
+    pos_weight = compute_global_pos_weight(train_loader)
+    # criterion = nn.BCEWithLogitsLoss(
+    #     pos_weight=torch.tensor(pos_weight, device=device), reduction="mean"
+    # )
+    criterion = nn.CrossEntropyLoss(torch.Tensor([1 / pos_weight, 1]).to(device))
     print(f"{pos_weight:.4f}")
 
     # Optimizer and scheduler
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         mode="min",
@@ -101,7 +96,10 @@ if __name__ == "__main__":
         print(f"Epoch {epoch}/{num_epochs}")
         train_loss = gnn.train(model, train_loader, criterion, optimizer, device)
         test_loss, test_acc, acc_0, acc_1, f1 = gnn.evaluate(
-            model, test_loader, criterion, device, threshold=0.5
+            model,
+            test_loader,
+            criterion,
+            device,
         )
         print(
             f"Train Loss: {train_loss:.2f}, Test Loss: {test_loss:.2f}, Test Acc: {test_acc:.2f}, "
