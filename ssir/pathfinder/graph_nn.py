@@ -114,6 +114,7 @@ class GATEdgeClassifier(nn.Module):
         """
         super(GATEdgeClassifier, self).__init__()
         self.use_residual = use_residual
+        self.edge_attr_bn = nn.BatchNorm1d(3)
 
         # Build NNConv layer for edge embeddings.
         edge_nn = nn.Sequential(
@@ -150,6 +151,7 @@ class GATEdgeClassifier(nn.Module):
 
     def forward(self, data):
         x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
+        edge_attr = self.edge_attr_bn(edge_attr)
 
         # Compute edge embeddings.
         x = self.nn_conv(x, edge_index, edge_attr)
