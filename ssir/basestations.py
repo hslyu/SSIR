@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-
 import json
 import math
+import os
 import pickle
 from abc import ABC
 from dataclasses import dataclass
@@ -221,9 +221,9 @@ class BaseStation(AbstractNode):
         Implementation of the Equation (??) in the paper.
         """
         if not self.has_children():
-            return 0
+            return float("inf")
         self._set_transmission_and_jamming_power_density()
-        denominator = 0.0
+        denominator = 1e-8
         for node in self.get_children():
             snr = self._compute_snr(node)
             spectral_efficiency = np.log2(1 + snr)
@@ -389,7 +389,7 @@ class User(AbstractNode):
 
 class IABRelayGraph:
     def __init__(self, environmental_variables=environmental_variables):
-        self.nodes: Dict[int, AbstractNode] = {}
+        self.nodes: Dict[int, BaseStation | User] = {}
         self.users: List[User] = []
         self.basestations: List[BaseStation] = []
 
@@ -493,24 +493,48 @@ class IABRelayGraph:
         return self.adjacency_list.get(node_id, [])
 
     def compute_hops(self):
-        if self.is_hop_computed:
-            return
+        # reset the hops of users
+        for user in self.users:
+            user.hops = 0
+        for base_station in self.basestations:
+            base_station.connected_user = []
+        #
+        #
+        # if self.is_hop_computed:
+        #     return
 
         self.is_hop_computed = True
         for user in self.users:
-            current_node = user
-            while True:
-                assert current_node is not None, f"Current node {current_node} is None."
-                if current_node.has_parent():
-                    user.hops += 1
-                    parent_nodes: List[AbstractNode] = current_node.get_parent()
-                    assert (
-                        len(parent_nodes) == 1
-                    ), f"There are more than one parent node: {parent_nodes}"
-                    current_node = parent_nodes[0]
-                    current_node.connected_user.append(user)
-                else:
-                    break
+            self.compute_hops_for_one_user(user.get_id())
+            # current_node = user
+            # while True:
+            #     assert current_node is not None, f"Current node {current_node} is None."
+            #     if current_node.has_parent():
+            #         user.hops += 1
+            #         parent_nodes: List[AbstractNode] = current_node.get_parent()
+            #         assert (
+            #             len(parent_nodes) == 1
+            #         ), f"There are more than one parent node. Current node: {current_node} Parent node: {parent_nodes}"
+            #         current_node = parent_nodes[0]
+            #         current_node.connected_user.append(user)
+            #     else:
+            #         break
+
+    def compute_hops_for_one_user(self, user_id):
+        user = self.nodes[user_id]
+        current_node = user
+        while True:
+            assert current_node is not None, f"Current node {current_node} is None."
+            if current_node.has_parent():
+                user.hops += 1
+                parent_nodes: List[AbstractNode] = current_node.get_parent()
+                assert (
+                    len(parent_nodes) == 1
+                ), f"There are more than one parent node. Current node: {current_node} Parent node: {parent_nodes}"
+                current_node = parent_nodes[0]
+                current_node.connected_user.append(user)
+            else:
+                break
 
     def connect_reachable_nodes(
         self, target_node_id: Optional[int] = None, source_node_id: int = 0
@@ -560,6 +584,12 @@ class IABRelayGraph:
                 rechable_nodes.append(node.get_id())
         return rechable_nodes
 
+    def copy(self):
+        """
+        Create a copy of the graph.
+        """
+        return self.copy_graph_with_selected_nodes(list(self.nodes.keys()))
+
     def copy_graph_with_selected_nodes(self, selected_nodes: List[int]):
         """
         Create a new graph with the selected nodes.
@@ -589,14 +619,12 @@ class IABRelayGraph:
 
     def compute_network_throughput(self):
         self.compute_hops()
-        min_throughput = float("500")
+
+        throughput_list = []
         for node in self.basestations[1:]:
-            if not node.has_children():
-                continue
             throughput = node.compute_throughput()
-            if throughput < min_throughput:
-                min_throughput = throughput
-        return min_throughput
+            throughput_list.append(throughput)
+        return min(throughput_list)
 
     def save_graph(self, filepath: str, pkl=True):
         """
@@ -628,31 +656,35 @@ class IABRelayGraph:
         """
         Load the graph from a file.
         """
+        # Check whether the file exists.
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"File {filepath} does not exist.")
+
         if pkl:
             with open(filepath, "rb") as file:
-                self = pickle.load(file)
-            return
+                graph = pickle.load(file)
+                self.__dict__.update(graph.__dict__)
+        else:
+            # Load the graph from a JSON file
+            with open(filepath, "r") as file:
+                data = json.load(file)
 
-        # Load the graph from a JSON file
-        with open(filepath, "r") as file:
-            data = json.load(file)
+            # Create nodes
+            for node_id, node_data in data["nodes"].items():
+                position = np.array(node_data["position"])
+                if node_data["type"] == "User":
+                    node = User(int(node_id), position)
+                else:
+                    node = BaseStation(
+                        int(node_id),
+                        position,
+                        BaseStationType[node_data["type"]],
+                    )
+                self.add_node(node)
 
-        # Create nodes
-        for node_id, node_data in data["nodes"].items():
-            position = np.array(node_data["position"])
-            if node_data["type"] == "User":
-                node = User(int(node_id), position)
-            else:
-                node = BaseStation(
-                    int(node_id),
-                    position,
-                    BaseStationType[node_data["type"]],
-                )
-            self.add_node(node)
-
-        # Create edges
-        for from_node_id, to_node_id in data["edges"]:
-            self.add_edge(from_node_id, to_node_id)
+            # Create edges
+            for from_node_id, to_node_id in data["edges"]:
+                self.add_edge(from_node_id, to_node_id)
 
     def to_networkx(self):
         """
@@ -776,7 +808,10 @@ class IABRelayGraph:
         # Convert lists to torch tensors
         x = torch.tensor(np.stack(node_features), dtype=torch.float)
         edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
-        edge_attr = torch.tensor(np.stack(edge_features), dtype=torch.float)
+        if edge_features:
+            edge_attr = torch.tensor(np.stack(edge_features), dtype=torch.float)
+        else:
+            edge_attr = torch.tensor([], dtype=torch.float)
 
         # Create and return the torch_geometric.data.Data object
         data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
