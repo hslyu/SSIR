@@ -16,39 +16,43 @@ from ssir import pathfinder as pf
 # Predefined maps
 map_list = [
     {
-        "latitude_range": [25, 55],
-        "longitude_range": [-15, 65],
+        "longitude_range": [0, 45],
+        "latitude_range": [20, 45],
     },
     {
-        "latitude_range": [-18, 12],
         "longitude_range": [90, 150],
+        "latitude_range": [-18, 12],
     },
     {
-        "latitude_range": [10, 40],
         "longitude_range": [100, 150],
+        "latitude_range": [10, 40],
     },
     {
-        "latitude_range": [-8, 22],
         "longitude_range": [35, 105],
+        "latitude_range": [-8, 22],
     },
     {
-        "latitude_range": [22, 52],
         "longitude_range": [-83, 2],
+        "latitude_range": [22, 52],
     },
 ]
 
 
 def generate_config(exp_index):
     random.seed(exp_index)
+    map = map_list[exp_index % len(map_list)]
+    area_size = (map["latitude_range"][1] - map["latitude_range"][0]) * (
+        map["longitude_range"][1] - map["longitude_range"][0]
+    )
     config = {
-        "num_maritime_basestations": random.randint(40, 50),
-        "num_ground_basestations": random.randint(60, 80),
-        "num_haps_basestations": random.randint(15, 20),
-        "num_leo_basestations": random.randint(10, 15),
-        "num_users": random.randint(40, 60),
+        "num_maritime_basestations": int(area_size / 15),
+        "num_ground_basestations": int(area_size / 10),
+        "num_haps_basestations": int(area_size / 70),
+        "num_leo_basestations": int(area_size / 80),
+        "num_users": int(area_size / 20),
         "random_seed": exp_index,
     }
-    config.update(map_list[exp_index % len(map_list)])
+    config.update(map)
     return config
 
 
@@ -127,7 +131,8 @@ class DataManager:
             self.gdf_list[3], num_maritime_basestations
         )
         ground_basestations_points = self.generate_random_points_within_gdf(
-            self.gdf_list[0], num_ground_basestations, near_coastline=True
+            self.gdf_list[0],
+            num_ground_basestations,
         )
         haps_basestations_points = self.generate_random_points_within_gdf(
             self.bbox_gdf, num_haps_basestations
@@ -256,7 +261,6 @@ class DataManager:
                 node_id += 1
 
         # Add users nodes
-        # TODO(?): distinguish ground user, maritime user, and aeiral users
         for i, point in enumerate(user_gdf_list["geometry"]):
             node = bs.User(node_id, np.array([point.x, point.y, 0]), isGeographic=True)
             graph.add_node(node)
@@ -281,14 +285,18 @@ class DataManager:
                 # graph.remove_node(user.get_id())
 
         source = graph.nodes[0]
-        while len(source.get_children()) < 3:
+        while len(source.get_children()) < 5:
             source_basestation_point = self.generate_random_points_within_gdf(
                 self.gdf_list[0], 1, near_coastline=True, offset_length=3, source=True
+            )
+            self.node_gdf_list[0] = gpd.GeoDataFrame(
+                {"geometry": source_basestation_point}, crs=self.target_crs
             )
             source._position = np.array(
                 [source_basestation_point[0].x, source_basestation_point[0].y, 0]
             )
             graph.connect_reachable_nodes(target_node_id=0)
+        print(source.get_children())
 
         # Rearrange node id to be consecutive
         graph.reset()
@@ -300,6 +308,12 @@ class DataManager:
             node._node_id = i
             graph.add_node(node)
         graph.connect_reachable_nodes()
+
+        user_point_list = [user.get_position()[:2] for user in graph.users]
+        self.node_gdf_list[-1] = gpd.GeoDataFrame(
+            {"geometry": [Point(*point) for point in user_point_list]},
+            crs=self.target_crs,
+        )
 
         return graph
 
@@ -339,6 +353,7 @@ class PlotManager:
         self,
         dm: DataManager,
         graph_list: Optional[Union[bs.IABRelayGraph, List[bs.IABRelayGraph]]] = None,
+        verbose_id: int | None = None,
         verbose: bool = False,
     ):
         fig, ax = plt.subplots(figsize=(10, 10))
@@ -372,12 +387,13 @@ class PlotManager:
             # print node id on the plot
             if verbose:
                 for idx, row in node_gdf.iterrows():
-                    ax.text(
-                        row["geometry"].x - 1.1,
-                        row["geometry"].y - 1.6,
-                        f"{node_id}",
-                        fontsize=12,
-                    )
+                    if verbose_id is None or node_id == verbose_id:
+                        ax.text(
+                            row["geometry"].x,
+                            row["geometry"].y,
+                            f"{node_id}",
+                            fontsize=12,
+                        )
                     node_id += 1
 
         if graph_list is None:
