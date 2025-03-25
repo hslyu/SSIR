@@ -18,11 +18,11 @@ from torch_geometric.data import Data
 @dataclass
 class EnvironmentalVariables:
     noise_power_density: float = -174
-    SPSC_probability: float = 0.999
+    SPSC_probability: float = 0.9999
     maritime_basestations_altitude: float = 0.0
     ground_basestations_altitude: float = 0.25
     haps_basestations_altitude: float = 22
-    leo_basestations_altitude: float = 800
+    leo_basestations_altitude: float = 500
 
 
 environmental_variables = EnvironmentalVariables()
@@ -47,52 +47,57 @@ class BaseStationConfig:
     antenna_gain_to_noise_temperature: float  # in dB
     pathloss_exponent: float  # dimensionless
     eavesdropper_density: float  # in m^-2
+    maximum_link_distance: float  # in km
 
 
 class BaseStationType(Enum):
     MARITIME = BaseStationConfig(
         power_capacity=30,  # in dBm
-        minimum_transit_power_ratio=0.9,  # dimensionless
+        minimum_transit_power_ratio=0.8,  # dimensionless
         carrier_frequency=14,  # in GHz
         bandwidth=250,  # in MHz
         transmit_antenna_gain=25,  # in dBi
         receive_antenna_gain=25,  # in dBi
         antenna_gain_to_noise_temperature=1.5,  # in dB
         pathloss_exponent=2.9,  # dimensionless
-        eavesdropper_density=1.5e-4,  # in km^-2
+        eavesdropper_density=1e-3,  # in km^-2
+        maximum_link_distance=150,  # in km
     )
     GROUND = BaseStationConfig(
         power_capacity=30,  # in dBm
-        minimum_transit_power_ratio=0.9,  # dimensionless
+        minimum_transit_power_ratio=0.8,  # dimensionless
         carrier_frequency=14,  # in GHz
         bandwidth=250,  # in MHz
         transmit_antenna_gain=25,  # in dBi
         receive_antenna_gain=25,  # in dBi
         antenna_gain_to_noise_temperature=1.5,  # in dB
-        pathloss_exponent=3.2,  # dimensionless
-        eavesdropper_density=1e-4,  # in km^-2
+        pathloss_exponent=2.8,  # dimensionless
+        eavesdropper_density=1e-3,  # in km^-2
+        maximum_link_distance=150,  # in km
     )
     HAPS = BaseStationConfig(
         power_capacity=30,  # in dBm
-        minimum_transit_power_ratio=0.90,  # dimensionless
+        minimum_transit_power_ratio=0.8,  # dimensionless
         carrier_frequency=14,  # in GHz
         bandwidth=250,  # in MHz
         transmit_antenna_gain=25,  # in dBi
         receive_antenna_gain=25,  # in dBi
         antenna_gain_to_noise_temperature=1.5,  # in dB
-        pathloss_exponent=2.7,  # dimensionless
+        pathloss_exponent=2.5,  # dimensionless
         eavesdropper_density=3e-4,  # in km^-2
+        maximum_link_distance=500,  # in km
     )
     LEO = BaseStationConfig(
         power_capacity=21.5,  # in dBm
-        minimum_transit_power_ratio=0.90,  # dimensionless
+        minimum_transit_power_ratio=0.8,  # dimensionless
         carrier_frequency=20,  # in GHz
         bandwidth=400,  # in MHz
         transmit_antenna_gain=38.5,  # in dBi
         receive_antenna_gain=38.5,  # in dBi
         antenna_gain_to_noise_temperature=13,  # in dB
-        pathloss_exponent=2.4,  # dimensionless
-        eavesdropper_density=3e-4,  # in km^-2
+        pathloss_exponent=2.5,  # dimensionless
+        eavesdropper_density=5e-5,  # in km^-2
+        maximum_link_distance=900,  # in km
     )
 
     @property
@@ -308,7 +313,7 @@ class BaseStation(AbstractNode):
             np.pi
             * self.basestation_type.config.eavesdropper_density
             / np.sin(2 * np.pi / pathloss_exponent)
-        )
+        ) ** 0.806 / 0.11  # Curve fitting
         max_distance = self._get_farthest_forward_link_distance()
 
         # Equation for threshold
@@ -319,6 +324,7 @@ class BaseStation(AbstractNode):
                 0,
             )
             * noise_power_density
+            * 3.1623  # 5 dBm offset
         )
         jamming_power_density_mW_over_Hz = min(
             jamming_power_density_mW_over_Hz, power_capacity_density
@@ -362,14 +368,17 @@ class BaseStation(AbstractNode):
         tau = environmental_variables.SPSC_probability
         kappa = (
             np.pi * config.eavesdropper_density / np.sin(2 * np.pi / pathloss_exponent)
-        ) ** 0.8 / 0.11
-        jamming_ratio = noise_power_density / (
-            maximum_jamming_power_density + noise_power_density
-        )
+        ) ** 0.806 / 0.11  # Curve fitting
+        jamming_ratio = (
+            noise_power_density
+            / (maximum_jamming_power_density + noise_power_density)
+            * 3.1623
+        )  # 5 dBm offset
 
-        max_distance = (
-            -np.log(tau) / kappa / jamming_ratio ** (2 / pathloss_exponent)
-        ) ** 0.5
+        max_distance = min(
+            (-np.log(tau) / kappa / jamming_ratio ** (2 / pathloss_exponent)) ** 0.5,
+            self.basestation_type.config.maximum_link_distance,
+        )
 
         return max_distance
 
@@ -540,18 +549,18 @@ class IABRelayGraph:
         self, target_node_id: Optional[int] = None, source_node_id: int = 0
     ):
         """
-        Connects all rechable nodes in the graph.
+        Connects all reachable nodes in the graph.
         """
         # Connect all reachable nodes in the graph
         if target_node_id is None:
             for from_node in self.basestations:
                 from_node_id = from_node.get_id()
-                for to_node_id in self.compute_rechable_nodes(from_node_id):
+                for to_node_id in self.compute_reachable_nodes(from_node_id):
                     if from_node_id == to_node_id or to_node_id == source_node_id:
                         continue
                     self.add_edge(from_node_id, to_node_id)
         else:
-            for to_node_id in self.compute_rechable_nodes(target_node_id):
+            for to_node_id in self.compute_reachable_nodes(target_node_id):
                 if to_node_id == source_node_id:
                     continue
                 self.add_edge(target_node_id, to_node_id)
@@ -565,7 +574,7 @@ class IABRelayGraph:
                 self.nodes[source_node_id].remove_child_link(self.nodes[node.get_id()])
                 self.nodes[node.get_id()].remove_parent_link(self.nodes[source_node_id])
 
-    def compute_rechable_nodes(self, node_id: int):
+    def compute_reachable_nodes(self, node_id: int):
         if node_id not in self.nodes:
             raise ValueError(f"Node {node_id} does not exist in the graph.")
 
@@ -575,14 +584,26 @@ class IABRelayGraph:
         ), f"Node {node_id} is not a base station."
 
         maximum_link_distance = test_node.compute_maximum_link_distance()
-        rechable_nodes = []
+        reachable_nodes = []
         for node in self.nodes.values():
             # if node.has_parent() or test_node == node:
             if test_node == node:
                 continue
             if test_node.get_distance(node) <= maximum_link_distance:
-                rechable_nodes.append(node.get_id())
-        return rechable_nodes
+                reachable_nodes.append(node.get_id())
+
+            if isinstance(node, BaseStation):
+                if (
+                    node.basestation_type == BaseStationType.LEO
+                    and test_node.get_distance(node) <= 800
+                ):
+                    reachable_nodes.append(node.get_id())
+                elif (
+                    node.basestation_type == BaseStationType.HAPS
+                    and test_node.get_distance(node) <= 500
+                ):
+                    reachable_nodes.append(node.get_id())
+        return reachable_nodes
 
     def copy(self):
         """
@@ -984,15 +1005,15 @@ if __name__ == "__main__":
     # print(bs0.compute_throughput())
     # print(bs0.get_distance(bs1))
     # print(bs0.compute_maximum_link_distance())
-    # print(graph.compute_rechable_nodes(0))
+    # print(graph.compute_reachable_nodes(0))
 
     for from_node in graph.basestations:
         print(
             from_node.basestation_type,
             from_node.compute_maximum_link_distance(),
-            graph.compute_rechable_nodes(from_node.get_id()),
+            graph.compute_reachable_nodes(from_node.get_id()),
         )
-        for to_node in graph.compute_rechable_nodes(from_node.get_id()):
+        for to_node in graph.compute_reachable_nodes(from_node.get_id()):
             graph.add_edge(from_node.get_id(), to_node)
     print(graph.adjacency_list)
 
