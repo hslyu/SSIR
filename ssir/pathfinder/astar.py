@@ -59,6 +59,16 @@ def a_star(
                 )
             elif metric == "hop":
                 edge_cost = 1
+            elif metric == "spectral_efficiency":
+                node = graph.nodes[current_node_id]
+                assert isinstance(node, bs.BaseStation), (
+                    f"Node {current_node_id} is not a base station. "
+                    "Spectral efficiency can only be calculated for base stations."
+                )
+                edge_cost = random.expovariate(1) * (
+                    node.get_distance(graph.nodes[neighbor])
+                    ** node.basestation_type.config.pathloss_exponent
+                )
             elif metric == "random":
                 edge_cost = random.random()
             else:

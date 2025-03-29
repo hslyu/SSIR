@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torch import nn
 from torch.serialization import add_safe_globals
 from torch.utils.data import Dataset
-from torch_geometric.data import Batch, storage
+from torch_geometric.data import storage
 from torch_geometric.data.data import DataEdgeAttr, DataTensorAttr
 from torch_geometric.nn import GATConv, GCNConv, NNConv
 from tqdm import tqdm

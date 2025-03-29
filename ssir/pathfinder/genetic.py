@@ -1,11 +1,10 @@
 import random
-from typing import Dict, List, Tuple
+from typing import List
 
 import numpy as np
 import pygad as ga
 
 from ssir import basestations as bs
-from ssir.pathfinder import astar
 from ssir.pathfinder.astar import a_star, get_shortest_path
 
 
@@ -47,26 +46,36 @@ class GeneticAlgorithm:
         self.min_fitness = float("-inf")
 
     def set_initial_population(self):
-        costs, predecessors = a_star(self.graph, metric="hop")
-        # Append all the nodes in the path to the appeared_nodes set
-        appeared_nodes = set()
-        for user in self.graph.users:
-            path = get_shortest_path(predecessors, user.get_id())
-            for node in path:
-                appeared_nodes.add(node)
+        def get_astar_initial_mask(metric="hop"):
+            costs, predecessors = a_star(self.graph, metric="hop")
+            # Append all the nodes in the path to the appeared_nodes set
+            appeared_nodes = set()
+            for user in self.graph.users:
+                path = get_shortest_path(predecessors, user.get_id())
+                for node in path:
+                    appeared_nodes.add(node)
 
-        # masking the optional nodes that are already appeared in the path
-        mask = [
-            1 if node.get_id() in appeared_nodes else 0 for node in self.optional_nodes
-        ]
+            # masking the optional nodes that are already appeared in the path
+            mask = [
+                1 if node.get_id() in appeared_nodes else 0
+                for node in self.optional_nodes
+            ]
+
+            return mask
+
+        mask_hop = get_astar_initial_mask(metric="hop")
+        mask_distance = get_astar_initial_mask(metric="distance")
+        mask_spectral_efficiency = get_astar_initial_mask(metric="spectral_efficiency")
 
         # create the initial population with randomized binaries
         initial_population = np.random.randint(
             0, 2, (self.ga_params["sol_per_pop"], self.num_optional_nodes)
         )
         # Set the first 10 population to the mask
-        initial_population[0] = np.array(mask)
-        initial_population[1] = np.ones(self.num_optional_nodes)
+        initial_population[0] = np.array(mask_hop)
+        initial_population[1] = np.array(mask_distance)
+        initial_population[2] = np.array(mask_spectral_efficiency)
+        initial_population[3] = np.ones(self.num_optional_nodes)
 
         return initial_population
 

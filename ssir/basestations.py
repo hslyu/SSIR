@@ -238,6 +238,10 @@ class BaseStation(AbstractNode):
                 sum_hops = sum([user.hops for user in node.connected_user])
             else:
                 raise ValueError("Unsupported node type.")
+            if spectral_efficiency == 0:
+                print(
+                    f"{self}, {node}, {self.jamming_power_density}, {self.transmission_power_density} : SNR: {snr}, Spectral Efficiency: {spectral_efficiency}"
+                )
             denominator += sum_hops / spectral_efficiency
 
         self.throughput = self.basestation_type.config.bandwidth * 1e6 / denominator
@@ -280,6 +284,15 @@ class BaseStation(AbstractNode):
         tx_power_density_dbm = self.transmission_power_density
         tx_gain_db = config.transmit_antenna_gain
         rx_gain_db = config.receive_antenna_gain
+        antenna_gain_to_noise_temperature = config.antenna_gain_to_noise_temperature
+        if (
+            self.basestation_type.name != BaseStationType.LEO.name
+            and isinstance(node, BaseStation)
+            and node.basestation_type.name == BaseStationType.LEO.name
+        ):
+            tx_gain_db = 43.2
+            rx_gain_db = 39.7
+            antenna_gain_to_noise_temperature = 16.2
 
         # Received power [dBm]
         rx_power_dbm = tx_power_density_dbm + tx_gain_db + rx_gain_db - pathloss_d
@@ -288,7 +301,7 @@ class BaseStation(AbstractNode):
         # Thermal noise = -174 dBm/Hz
         noise_power_density_dbm = (
             environmental_variables.noise_power_density
-            + config.antenna_gain_to_noise_temperature
+            + antenna_gain_to_noise_temperature
         )
 
         # SNR [dB]
