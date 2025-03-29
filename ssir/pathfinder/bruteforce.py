@@ -8,7 +8,10 @@ from ssir.pathfinder.astar import a_star, get_shortest_path
 
 
 def get_solution_graph(
-    graph: bs.IABRelayGraph, n_trial: int = 5000, num_predecessors: int = 20
+    graph: bs.IABRelayGraph,
+    n_trial: int = 5000,
+    num_predecessors: int = 20,
+    verbose=False,
 ):
     count = 0
     best_graph: bs.IABRelayGraph = None
@@ -45,11 +48,12 @@ def get_solution_graph(
             best_throughput = throughput
 
         count += 1
-        print(
-            f"[{count}/{n_trial}] Best throughput: {best_throughput:.2f}",
-            end="\r",
-            flush=True,
-        )
+        if verbose:
+            print(
+                f"[{count}/{n_trial}] Best throughput: {best_throughput:.2f}",
+                end="\r",
+                flush=True,
+            )
 
     return best_graph
 
@@ -97,4 +101,3 @@ def get_all_shortest_paths(
             spath = get_shortest_path(preds, user_id)
             paths_dict[user_id].append(spath)
     return paths_dict
-

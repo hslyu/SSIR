@@ -113,44 +113,43 @@ def run_one_experiment(exp_id, threshold, base_dir, env_dir):
     exp_dir = os.path.join(threshold_dir, f"exp_{exp_id:03d}")
     os.makedirs(exp_dir, exist_ok=True)
 
-    # Collect throughput for printing
+    # Collect throughput for saving and printing
+    throughput_dict = {}
     result_str_parts = []
     for scheme_name, (scheme_graph, throughput) in scheme_results.items():
-        # Save throughput in result.json
-        scheme_dir = os.path.join(exp_dir, scheme_name)
-        os.makedirs(scheme_dir, exist_ok=True)
-
-        result_path = os.path.join(scheme_dir, "result.json")
-        with open(result_path, "w") as f:
-            json.dump({"throughput": throughput}, f, indent=4)
-
-        # Save the scheme-specific graph in pickle
-        graph_path = os.path.join(scheme_dir, "solution.pkl")
+        # Save graph as solution_<scheme>.pkl
+        graph_path = os.path.join(exp_dir, f"solution_{scheme_name}.pkl")
         scheme_graph.save_graph(graph_path, pkl=True)
 
+        # Collect throughput
+        throughput_dict[scheme_name] = throughput
         result_str_parts.append(f"{scheme_name}={throughput:.2f}")
+
+    # Save all throughputs in one result.json
+    result_path = os.path.join(exp_dir, "result.json")
+    with open(result_path, "w") as f:
+        json.dump(throughput_dict, f, indent=4)
 
     # Print summary for this experiment
     summary_str = f"[Exp] Threshold={threshold:.4f}, Exp={exp_id:03d} | " + " ".join(
         result_str_parts
     )
-    return summary_str
+    return throughput_dict, summary_str
 
 
 def main_experiment():
     """
     This experiment will:
-      1) Swap loop order: outer loop on thresholds, inner loop on experiments.
-      2) Parallelize the experiment loop using joblib.
-      3) For each (threshold, exp_id), load or create config+graph from base_dir/env/exp_{exp_id:03d}.
-      4) Run all schemes, save throughput in result.json, and solution graph as solution.pkl.
+      1) Use a single TQDM progress bar for all threshold * experiment tasks.
+      2) For each threshold, run experiments in parallel.
+      3) Print partial progress in real time, and after finishing the chunk of experiments for a threshold, print average summary.
     """
     # Define thresholds
     raw_logspace = np.logspace(-1, -4, 15)
     thresholds_to_test = 1 - raw_logspace
 
     # Number of experiments
-    num_experiments = 30  # could be 500 or any large number
+    num_experiments = 10  # could be 500 or any large number
 
     # Base directory for all results
     base_dir = "./results_mmf_vs_spsc"
@@ -160,16 +159,37 @@ def main_experiment():
     env_dir = os.path.join(base_dir, "env")
     os.makedirs(env_dir, exist_ok=True)
 
-    for threshold in tqdm(thresholds_to_test, desc="Threshold Loop"):
-        # Parallel execution for each exp_id
-        summaries = Parallel(n_jobs=-1)(
-            delayed(run_one_experiment)(exp_id, threshold, base_dir, env_dir)
-            for exp_id in range(num_experiments)
-        )
+    # Calculate total tasks for progress bar
+    total_tasks = len(thresholds_to_test) * num_experiments
+    with tqdm(total=total_tasks, desc="Overall Progress") as pbar:
+        for threshold in thresholds_to_test:
+            # Run all experiments for this threshold in parallel
+            results = Parallel(n_jobs=-1)(
+                delayed(run_one_experiment)(exp_id, threshold, base_dir, env_dir)
+                for exp_id in range(num_experiments)
+            )
 
-        # Print results from all experiments
-        for summary_str in summaries:
-            print(summary_str)
+            # Print partial results as soon as each experiment returns
+            # (Since joblib gathers after all tasks are done in parallel for this chunk,
+            #  we print them after the chunk completes. But we still update the progress bar for each.)
+            for _, summary_str in results:
+                pbar.update(1)
+                # Show how many tasks are done out of total
+                current_count = pbar.n
+                total_count = pbar.total
+                print(f"[{current_count}/{total_count}] {summary_str}")
+
+            # After finishing all experiments for this threshold, compute average summary
+            aggregate = {}
+            for throughput_dict, _ in results:
+                for scheme, val in throughput_dict.items():
+                    aggregate[scheme] = aggregate.get(scheme, 0) + val
+
+            avg_summary = {k: v / num_experiments for k, v in aggregate.items()}
+            avg_str = f"[Summary] Threshold={threshold:.4f} | " + " ".join(
+                [f"{k}={v:.2f}" for k, v in avg_summary.items()]
+            )
+            print(avg_str)
 
 
 if __name__ == "__main__":
