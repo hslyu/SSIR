@@ -11,7 +11,7 @@ def get_solution_graph(
     graph: bs.IABRelayGraph, n_trial: int = 5000, num_predecessors: int = 20
 ):
     count = 0
-    best_graph: bs.IABRelayGraph | None = None
+    best_graph: bs.IABRelayGraph = None
     best_throughput = float("-inf")
     while count < n_trial:
         metrics = ["hop", "distance"] + ["random"] * num_predecessors
@@ -97,3 +97,4 @@ def get_all_shortest_paths(
             spath = get_shortest_path(preds, user_id)
             paths_dict[user_id].append(spath)
     return paths_dict
+

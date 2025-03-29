@@ -1,4 +1,3 @@
-import copy
 import json
 import os
 
@@ -8,7 +7,7 @@ from tqdm import tqdm
 
 import ssir.environment as env
 from ssir import basestations as bs
-from ssir.pathfinder import astar, genetic, montecarlo
+from ssir.pathfinder import astar, bruteforce, genetic, montecarlo
 
 
 def save_config(config, dir_path, filename="config.json"):
@@ -88,6 +87,12 @@ def run_schemes(graph):
     scheme_results["montecarlo"] = (
         g_montecarlo,
         g_montecarlo.compute_network_throughput(),
+    )
+
+    g_bruteforce = bruteforce.get_solution_graph(graph)
+    scheme_results["bruteforce"] = (
+        g_bruteforce,
+        g_bruteforce.compute_network_throughput(),
     )
 
     return scheme_results
