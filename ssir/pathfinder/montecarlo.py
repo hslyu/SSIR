@@ -6,7 +6,10 @@ from ssir.pathfinder.astar import a_star, get_shortest_path
 
 
 def get_solution_graph(
-    graph: bs.IABRelayGraph, num_predecessors: int = 100, num_rounds: int = 10
+    graph: bs.IABRelayGraph,
+    num_predecessors: int = 500,
+    num_rounds: int = 10,
+    verbose=False,
 ):
     """
     Builds a solution graph by iteratively choosing the best paths for each user
@@ -60,9 +63,10 @@ def get_solution_graph(
                 result_graph.compute_hops_for_one_user(user_id)
 
         update_round += 1
-        print(
-            f"Round {update_round}: Throughput = {result_graph.compute_network_throughput()}, Time = {time.time()-s}"
-        )
+        if verbose:
+            print(
+                f"Round {update_round}: Throughput = {result_graph.compute_network_throughput()}, Time = {time.time() - s}"
+            )
 
     return result_graph
 
