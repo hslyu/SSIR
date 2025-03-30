@@ -59,7 +59,7 @@ class BaseStationType(Enum):
         transmit_antenna_gain=25,  # in dBi
         receive_antenna_gain=25,  # in dBi
         antenna_gain_to_noise_temperature=1.5,  # in dB
-        pathloss_exponent=2.9,  # dimensionless
+        pathloss_exponent=2.7,  # dimensionless
         eavesdropper_density=1e-3,  # in km^-2
         maximum_link_distance=150,  # in km
     )
@@ -72,7 +72,7 @@ class BaseStationType(Enum):
         receive_antenna_gain=25,  # in dBi
         antenna_gain_to_noise_temperature=1.5,  # in dB
         pathloss_exponent=2.8,  # dimensionless
-        eavesdropper_density=1e-3,  # in km^-2
+        eavesdropper_density=2e-3,  # in km^-2
         maximum_link_distance=150,  # in km
     )
     HAPS = BaseStationConfig(
@@ -83,7 +83,7 @@ class BaseStationType(Enum):
         transmit_antenna_gain=25,  # in dBi
         receive_antenna_gain=25,  # in dBi
         antenna_gain_to_noise_temperature=1.5,  # in dB
-        pathloss_exponent=2.5,  # dimensionless
+        pathloss_exponent=2.6,  # dimensionless
         eavesdropper_density=3e-4,  # in km^-2
         maximum_link_distance=500,  # in km
     )
@@ -95,8 +95,8 @@ class BaseStationType(Enum):
         transmit_antenna_gain=38.5,  # in dBi
         receive_antenna_gain=38.5,  # in dBi
         antenna_gain_to_noise_temperature=13,  # in dB
-        pathloss_exponent=2.5,  # dimensionless
-        eavesdropper_density=5e-5,  # in km^-2
+        pathloss_exponent=2.4,  # dimensionless
+        eavesdropper_density=1e-4,  # in km^-2
         maximum_link_distance=900,  # in km
     )
 
@@ -351,6 +351,8 @@ class BaseStation(AbstractNode):
         self.jamming_power_density = linear_to_dB(
             jamming_power_density_mW_over_Hz + 1e-16
         )
+        a = dB_to_linear(self.transmission_power_density)
+        b = dB_to_linear(self.jamming_power_density)
 
         return self.transmission_power_density, self.jamming_power_density
 
@@ -362,7 +364,7 @@ class BaseStation(AbstractNode):
                 max_distance = distance
         return max_distance
 
-    def compute_maximum_link_distance(self):
+    def compute_maximum_link_distance(self, is_los: bool = False) -> float:
         """
         Compute the maximum link distance.
         Implementation of the Equation (??) in the paper.
@@ -388,12 +390,18 @@ class BaseStation(AbstractNode):
             * 3.1623
         )  # 5 dBm offset
 
-        max_distance = min(
-            (-np.log(tau) / kappa / jamming_ratio ** (2 / pathloss_exponent)) ** 0.5,
-            self.basestation_type.config.maximum_link_distance,
-        )
+        max_los_distance = (
+            -np.log(tau) / kappa / jamming_ratio ** (2 / pathloss_exponent)
+        ) ** 0.5
+        if is_los:
+            return max_los_distance
+        else:
+            max_distance = min(
+                max_los_distance,
+                self.basestation_type.config.maximum_link_distance,
+            )
 
-        return max_distance
+            return max_distance
 
 
 class User(AbstractNode):
@@ -591,31 +599,62 @@ class IABRelayGraph:
         if node_id not in self.nodes:
             raise ValueError(f"Node {node_id} does not exist in the graph.")
 
-        test_node = self.nodes[node_id]
+        from_node = self.nodes[node_id]
         assert isinstance(
-            test_node, BaseStation
+            from_node, BaseStation
         ), f"Node {node_id} is not a base station."
 
-        maximum_link_distance = test_node.compute_maximum_link_distance()
+        maximum_link_distance = from_node.compute_maximum_link_distance()
+        maximum_link_distance_los = from_node.compute_maximum_link_distance(is_los=True)
         reachable_nodes = []
-        for node in self.nodes.values():
-            # if node.has_parent() or test_node == node:
-            if test_node == node:
-                continue
-            if test_node.get_distance(node) <= maximum_link_distance:
-                reachable_nodes.append(node.get_id())
-
-            if isinstance(node, BaseStation):
+        for to_node in self.nodes.values():
+            # Special case for the source node
+            if node_id == 0 and isinstance(to_node, BaseStation):
+                # Ground stations are wired connected.
                 if (
-                    node.basestation_type == BaseStationType.LEO
-                    and test_node.get_distance(node) <= 800
+                    to_node.basestation_type.name == BaseStationType.GROUND.name
+                    and from_node.get_distance(to_node) <= 300
                 ):
-                    reachable_nodes.append(node.get_id())
+                    reachable_nodes.append(to_node.get_id())
                 elif (
-                    node.basestation_type == BaseStationType.HAPS
-                    and test_node.get_distance(node) <= 500
+                    to_node.basestation_type.name == BaseStationType.MARITIME.name
+                    and from_node.get_distance(to_node) <= maximum_link_distance
                 ):
-                    reachable_nodes.append(node.get_id())
+                    reachable_nodes.append(to_node.get_id())
+                elif (
+                    to_node.basestation_type.name == BaseStationType.HAPS.name
+                    and from_node.get_distance(to_node) <= 300
+                ):
+                    reachable_nodes.append(to_node.get_id())
+                elif (
+                    to_node.basestation_type.name == BaseStationType.LEO.name
+                    and from_node.get_distance(to_node) <= 600
+                ):
+                    reachable_nodes.append(to_node.get_id())
+                continue
+
+            # Skip the same node
+            if from_node == to_node:
+                continue
+
+            # Add reachable nodes within the maximum link distance
+            if from_node.get_distance(to_node) <= maximum_link_distance:
+                reachable_nodes.append(to_node.get_id())
+
+            # Add a special case for HAPS to LEO connection
+            if (
+                isinstance(to_node, BaseStation)
+                and to_node.basestation_type.name == BaseStationType.LEO.name
+                and from_node.get_distance(to_node) <= maximum_link_distance_los
+            ):
+                reachable_nodes.append(to_node.get_id())
+            elif (
+                isinstance(to_node, BaseStation)
+                and to_node.basestation_type.name == BaseStationType.LEO.name
+                and from_node.get_distance(to_node) <= maximum_link_distance_los
+            ):
+                reachable_nodes.append(to_node.get_id())
+
         return reachable_nodes
 
     def copy(self):
@@ -651,11 +690,15 @@ class IABRelayGraph:
 
         return new_graph
 
-    def compute_network_throughput(self):
+    def compute_network_throughput(self, target_node_list: List[int] | None = None):
         self.compute_hops()
+        if target_node_list is None:
+            basestation_list = self.basestations[1:]
+        else:
+            basestation_list = [self.nodes[node_id] for node_id in target_node_list]
 
         throughput_list = []
-        for node in self.basestations[1:]:
+        for node in basestation_list:
             throughput = node.compute_throughput()
             throughput_list.append(throughput)
         return min(throughput_list)
@@ -1024,18 +1067,19 @@ if __name__ == "__main__":
         print(
             from_node.basestation_type,
             from_node.compute_maximum_link_distance(),
+            from_node.compute_maximum_link_distance(True),
             graph.compute_reachable_nodes(from_node.get_id()),
         )
         for to_node in graph.compute_reachable_nodes(from_node.get_id()):
             graph.add_edge(from_node.get_id(), to_node)
     print(graph.adjacency_list)
 
-    from ssir.pathfinder import astar
-
-    a, b = astar.a_star(graph)
-    print(a, b)
-    for node in graph.nodes.values():
-        print(astar.get_shortest_path(b, node.get_id()))
+    # from ssir.pathfinder import astar
+    #
+    # a, b = astar.a_star(graph)
+    # print(a, b)
+    # for node in graph.nodes.values():
+    #     print(astar.get_shortest_path(b, node.get_id()))
     # print(graph.adjacency_list)
     # print(graph.nodes[0])
     #
@@ -1044,5 +1088,5 @@ if __name__ == "__main__":
     # a = nx.all_simple_paths(nx_graph, 0, 1, cutoff=3)
     # for path in a:
     #     print(path)
-    gnx = graph.to_networkx()
-    print(gnx.nodes(data=True))
+    # gnx = graph.to_networkx()
+    # print(gnx.nodes(data=True))

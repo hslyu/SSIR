@@ -41,7 +41,7 @@ map_list = [
     },
     {
         "longitude_range": [-10, 20],
-        "latitude_range": [45, 65],
+        "latitude_range": [35, 55],
     },
 ]
 
@@ -52,10 +52,10 @@ def generate_config(exp_index):
         map["longitude_range"][1] - map["longitude_range"][0]
     )
     config = {
-        "num_maritime_basestations": int(area_size / 8),
-        "num_ground_basestations": int(area_size / 8),
-        "num_haps_basestations": int(area_size / 70),
-        "num_leo_basestations": int(area_size / 80),
+        "num_maritime_basestations": int(area_size / 7),
+        "num_ground_basestations": int(area_size / 6),
+        "num_haps_basestations": int(area_size / 50),
+        "num_leo_basestations": int(area_size / 60),
         "num_users": int(area_size / 10),
         "random_seed": exp_index,
     }
@@ -156,7 +156,9 @@ class DataManager:
         leo_basestations_points = self.generate_random_points_within_gdf(
             self.bbox_gdf, num_leo_basestations
         )
-        users_points = self.generate_random_points_within_gdf(self.bbox_gdf, num_users)
+        users_points = self.generate_random_points_within_gdf(
+            self.bbox_gdf, num_users, 20
+        )
         node_point_list = [
             source_basestation_point,
             maritime_basestations_points,
@@ -175,6 +177,7 @@ class DataManager:
         self,
         target_gdf,
         num_points,
+        factor=10,
     ):
         """
         Generate random points within a given GeoDataFrame.
@@ -192,7 +195,6 @@ class DataManager:
 
         # Generate random points within the bounding box
         minx, miny, maxx, maxy = target_gdf.total_bounds
-        factor = 10
         xs = np.random.uniform(minx, maxx, factor * num_points)
         ys = np.random.uniform(miny, maxy, factor * num_points)
         candidate_points = [Point(x, y) for x, y in zip(xs, ys)]
@@ -206,15 +208,17 @@ class DataManager:
         else:
             return inside_points
 
-    def generate_source_point(self, target_gdf, offset_length=3):
+    def generate_source_point(self, target_gdf, offset_length=5):
         # Prepare the target geometry for faster contains check
         merged_poly = unary_union(target_gdf.geometry)
         prepared_poly = prep(merged_poly)
 
         minx, miny, maxx, maxy = target_gdf.total_bounds
+        xrange = maxx - minx
+        yrange = maxy - miny
 
-        xs = np.random.uniform(minx, maxx, 30)
-        ys = np.random.uniform(miny, maxy, 30)
+        xs = np.random.uniform(minx + 0.2 * xrange, maxx - 0.2 * xrange, 30)
+        ys = np.random.uniform(miny + 0.2 * yrange, maxy - 0.2 * yrange, 30)
         points = [Point(x, y) for x, y in zip(xs, ys)]
 
         # Find the nearest point on the coastline
@@ -293,23 +297,28 @@ class DataManager:
             graph.add_node(node)
             node_id += 1
 
+        # Connect the nodes
+        graph.connect_reachable_nodes()
+
         # Change the location of source node connected with at least 5 nodes.
         source = graph.nodes[0]
         while len(source.get_children()) < 5:
-            # Reset the source graph edges
-            graph.adjacency_list[0] = []
-            source._children = []
+            # Remove the edges connected to the source node
+            for node in source.get_children():
+                graph.remove_edge(source.get_id(), node.get_id())
 
+            # Generate a new source node
             source_basestation_point = self.generate_source_point(self.gdf_list[0], 0)
             self.node_gdf_list[0] = gpd.GeoDataFrame(
                 geometry=source_basestation_point, crs=self.target_crs
             )
+            # Update the source node position
             source._position = np.array(
                 [source_basestation_point[0].x, source_basestation_point[0].y, 0]
             )
+            # Add the source node to the graph
             graph.connect_reachable_nodes(target_node_id=0)
 
-        graph.connect_reachable_nodes()
         costs, predecessors = pf.astar.a_star(graph, metric="distance")
         disconnected_uid_list = []
         for user in graph.users:
@@ -371,7 +380,7 @@ class PlotManager:
         "Users",
     ]
 
-    def plot_dm(
+    def plot(
         self,
         dm: DataManager,
         graph_list: Optional[Union[bs.IABRelayGraph, List[bs.IABRelayGraph]]] = None,
@@ -448,7 +457,7 @@ class PlotManager:
                     zorder=2,
                 )
 
-                if verbose and (verbose_id is None or node_id in verbose_id):
+                if verbose or (verbose_id is not None and node_id in verbose_id):
                     ax.text(
                         row["geometry"].x,  # type: ignore
                         row["geometry"].y,  # type: ignore
