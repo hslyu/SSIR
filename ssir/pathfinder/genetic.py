@@ -1,3 +1,4 @@
+import heapq
 import random
 from typing import List
 
@@ -21,16 +22,16 @@ class GeneticAlgorithm:
         self.ga_params = {
             "num_generations": 2000,
             "sol_per_pop": 50,
-            "num_parents_mating": 10,
+            "num_parents_mating": 6,
             "fitness_func": self.fitness_func,
             "num_genes": self.num_optional_nodes,
             "gene_space": [0, 1],
             "gene_type": int,
             "keep_parents": 4,  # elite_percent
-            "mutation_probability": 0.15,
+            "mutation_probability": 0.05,
             "crossover_probability": 1.0,
             "crossover_type": "single_point",
-            "mutation_type": "swap",
+            "mutation_type": "random",
             "on_generation": self.on_generation,
         }
         self.ga_params["initial_population"] = self.set_initial_population()
@@ -42,12 +43,17 @@ class GeneticAlgorithm:
 
         # store the best solutions
         costs, predecessors = astar.a_star(graph, metric="hop")
-        defualt_graph = astar.get_solution_graph(graph, predecessors)
+        default_graph = astar.get_solution_graph(graph, predecessors)
         mask = self._get_astar_initial_mask(metric="hop")
         self.top_solutions_dict = {
-            tuple(mask): (defualt_graph, defualt_graph.compute_network_throughput())
+            tuple(mask): (default_graph, default_graph.compute_network_throughput())
         }
-        self.max_solution_length = 100
+        self.top_solutions_heap = [
+            (default_graph.compute_network_throughput(), tuple(mask))
+        ]
+        heapq.heapify(self.top_solutions_heap)
+
+        self.max_solution_length = 128
         self.min_fitness = float("-inf")
 
     def set_initial_population(self):
@@ -191,8 +197,39 @@ class GeneticAlgorithm:
                 )
             return "stop"
 
+    # def _update_top_solutions(self, key, graph, fitness):
+    #     self.top_solutions_dict[key] = (graph, fitness)
+
     def _update_top_solutions(self, key, graph, fitness):
+        # If the heap/dictionary is not full, add the new entry
+        if len(self.top_solutions_dict) < self.max_solution_length:
+            self.top_solutions_dict[key] = (graph, fitness)
+            heapq.heappush(self.top_solutions_heap, (fitness, key))
+            return
+
+        # Clean up stale entries in the heap that do not match the current dictionary
+        while self.top_solutions_heap:
+            min_fitness, min_key = self.top_solutions_heap[0]
+            if (
+                min_key in self.top_solutions_dict
+                and self.top_solutions_dict[min_key][1] == min_fitness
+            ):
+                break
+            else:
+                heapq.heappop(self.top_solutions_heap)
+
+        # If the new fitness is not greater than the current minimum, do nothing
+        if self.top_solutions_heap and fitness <= self.top_solutions_heap[0][0]:
+            return
+
+        # Remove the entry with the minimum fitness
+        min_fitness, min_key = heapq.heappop(self.top_solutions_heap)
+        if min_key in self.top_solutions_dict:
+            del self.top_solutions_dict[min_key]
+
+        # Add the new entry into both dictionary and heap
         self.top_solutions_dict[key] = (graph, fitness)
+        heapq.heappush(self.top_solutions_heap, (fitness, key))
 
     def _get_astar_initial_mask(self, metric):
         costs, predecessors = astar.a_star(self.graph, metric=metric)
