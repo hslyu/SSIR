@@ -20,7 +20,7 @@ class GeneticAlgorithm:
 
         self.ga_params = {
             "num_generations": 2000,
-            "sol_per_pop": 100,
+            "sol_per_pop": 50,
             "num_parents_mating": 10,
             "fitness_func": self.fitness_func,
             "num_genes": self.num_optional_nodes,
@@ -37,12 +37,12 @@ class GeneticAlgorithm:
 
         self.last_best_fitness = float("-inf")
         self.no_improve_counter = 0
-        self.no_improve_limit = 100
+        self.no_improve_limit = 200
         self.num_trial = 4
 
         # store the best solutions
         self.top_solutions_dict = {}
-        self.max_solution_length = 200
+        self.max_solution_length = 100
         self.min_fitness = float("-inf")
 
     def set_initial_population(self):
@@ -89,7 +89,7 @@ class GeneticAlgorithm:
         # return solution_graph, solution_fitness
 
         best_graph = None
-        best_fitness = float("-inf")
+        best_fitness = 0
         for graph, fitness in self.top_solutions_dict.values():
             if fitness > best_fitness:
                 best_graph = graph
@@ -180,7 +180,7 @@ class GeneticAlgorithm:
 
         if self.verbose:
             print(
-                f"[{ga_instance.generations_completed}/{self.ga_params["num_generations"]}] "
+                f"[{ga_instance.generations_completed}/{self.ga_params['num_generations']}] "
                 + f"Current fitness: {current_best_fitness:.4f} | Early-stopping count: {self.no_improve_counter}         ",
                 end="\r",
                 flush=True,
