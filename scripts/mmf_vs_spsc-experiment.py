@@ -88,7 +88,7 @@ def run_schemes(graph):
     )
 
     # Bruteforce
-    g_bruteforce = bruteforce.get_solution_graph(graph, 2000, 5, 100)
+    g_bruteforce = bruteforce.get_solution_graph(graph, 2000, 10, 50)
     scheme_results["bruteforce"] = (
         g_bruteforce,
         g_bruteforce.compute_network_throughput(),
@@ -152,7 +152,7 @@ def main_experiment():
     raw_logspace = np.logspace(-1, -4, 15, base=10)
     thresholds_to_test = 1 - raw_logspace
     start = 0
-    num_experiments = 300
+    num_experiments = 100
 
     base_dir = "./results_mmf_vs_spsc"
     os.makedirs(base_dir, exist_ok=True)
