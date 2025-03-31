@@ -5,7 +5,7 @@ import numpy as np
 import pygad as ga
 
 from ssir import basestations as bs
-from ssir.pathfinder.astar import a_star, get_shortest_path
+from ssir.pathfinder import astar
 
 
 class GeneticAlgorithm:
@@ -41,31 +41,21 @@ class GeneticAlgorithm:
         self.num_trial = 4
 
         # store the best solutions
-        self.top_solutions_dict = {}
+        costs, predecessors = astar.a_star(graph, metric="hop")
+        defualt_graph = astar.get_solution_graph(graph, predecessors)
+        mask = self._get_astar_initial_mask(metric="hop")
+        self.top_solutions_dict = {
+            tuple(mask): (defualt_graph, defualt_graph.compute_network_throughput())
+        }
         self.max_solution_length = 100
         self.min_fitness = float("-inf")
 
     def set_initial_population(self):
-        def get_astar_initial_mask(metric="hop"):
-            costs, predecessors = a_star(self.graph, metric="hop")
-            # Append all the nodes in the path to the appeared_nodes set
-            appeared_nodes = set()
-            for user in self.graph.users:
-                path = get_shortest_path(predecessors, user.get_id())
-                for node in path:
-                    appeared_nodes.add(node)
-
-            # masking the optional nodes that are already appeared in the path
-            mask = [
-                1 if node.get_id() in appeared_nodes else 0
-                for node in self.optional_nodes
-            ]
-
-            return mask
-
-        mask_hop = get_astar_initial_mask(metric="hop")
-        mask_distance = get_astar_initial_mask(metric="distance")
-        mask_spectral_efficiency = get_astar_initial_mask(metric="spectral_efficiency")
+        mask_hop = self._get_astar_initial_mask(metric="hop")
+        mask_distance = self._get_astar_initial_mask(metric="distance")
+        mask_spectral_efficiency = self._get_astar_initial_mask(
+            metric="spectral_efficiency"
+        )
 
         # create the initial population with randomized binaries
         initial_population = np.random.randint(
@@ -127,7 +117,7 @@ class GeneticAlgorithm:
         # run A* algorithm to find the shortest path
         predecessors_list = []
         for _ in range(self.num_trial):
-            costs, predecessors = a_star(new_graph, metric="random")
+            costs, predecessors = astar.a_star(new_graph, metric="random")
             predecessors_list.append(predecessors)
 
         new_graph.reset()
@@ -138,7 +128,7 @@ class GeneticAlgorithm:
                 candidate.remove(random_choice)
 
                 predecessors = predecessors_list[random_choice]
-                path = get_shortest_path(predecessors, user.get_id())
+                path = astar.get_shortest_path(predecessors, user.get_id())
                 if -1 in path:
                     return max_fitness
 
@@ -203,6 +193,22 @@ class GeneticAlgorithm:
 
     def _update_top_solutions(self, key, graph, fitness):
         self.top_solutions_dict[key] = (graph, fitness)
+
+    def _get_astar_initial_mask(self, metric):
+        costs, predecessors = astar.a_star(self.graph, metric=metric)
+        # Append all the nodes in the path to the appeared_nodes set
+        appeared_nodes = set()
+        for user in self.graph.users:
+            path = astar.get_shortest_path(predecessors, user.get_id())
+            for node in path:
+                appeared_nodes.add(node)
+
+        # masking the optional nodes that are already appeared in the path
+        mask = [
+            1 if node.get_id() in appeared_nodes else 0 for node in self.optional_nodes
+        ]
+
+        return mask
 
 
 def get_solution_graph(graph: bs.IABRelayGraph, verbose=False):
