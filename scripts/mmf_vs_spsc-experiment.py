@@ -77,18 +77,18 @@ def run_schemes(graph):
     )
 
     # Genetic
-    g_genetic, _ = genetic.get_solution_graph(graph, verbose=False)
-    scheme_results["genetic"] = (g_genetic, g_genetic.compute_network_throughput())
+    g_genetic, genetic_throughput = genetic.get_solution_graph(graph)
+    scheme_results["genetic"] = (g_genetic, genetic_throughput)
 
     # Montecarlo
-    g_montecarlo = montecarlo.get_solution_graph(graph, 100)
+    g_montecarlo = montecarlo.get_solution_graph(graph, 300)
     scheme_results["montecarlo"] = (
         g_montecarlo,
         g_montecarlo.compute_network_throughput(),
     )
 
     # Bruteforce
-    g_bruteforce = bruteforce.get_solution_graph(graph, 2000, 10, 200)
+    g_bruteforce = bruteforce.get_solution_graph(graph, 2000, 5, 100)
     scheme_results["bruteforce"] = (
         g_bruteforce,
         g_bruteforce.compute_network_throughput(),
@@ -152,7 +152,7 @@ def main_experiment():
     raw_logspace = np.logspace(-1, -4, 15, base=10)
     thresholds_to_test = 1 - raw_logspace
     start = 0
-    num_experiments = 100
+    num_experiments = 300
 
     base_dir = "./results_mmf_vs_spsc"
     os.makedirs(base_dir, exist_ok=True)
@@ -174,7 +174,7 @@ def main_experiment():
     pbar = tqdm(total=total_tasks, desc="Overall Progress", position=0, leave=True)
 
     # Create a multiprocessing Pool with maxtasksperchild=1 to mitigate memory leakage
-    with multiprocessing.Pool() as pool:
+    with multiprocessing.Pool(processes=32) as pool:
         # Use imap_unordered to process tasks as they complete
         for result in pool.imap_unordered(run_task, tasks):
             completed += 1
