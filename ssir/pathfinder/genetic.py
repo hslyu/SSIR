@@ -20,7 +20,7 @@ class GeneticAlgorithm:
 
         self.ga_params = {
             "num_generations": 2000,
-            "sol_per_pop": 50,
+            "sol_per_pop": 100,
             "num_parents_mating": 10,
             "fitness_func": self.fitness_func,
             "num_genes": self.num_optional_nodes,
@@ -37,7 +37,7 @@ class GeneticAlgorithm:
 
         self.last_best_fitness = float("-inf")
         self.no_improve_counter = 0
-        self.no_improve_limit = 200
+        self.no_improve_limit = 100
         self.num_trial = 4
 
         # store the best solutions

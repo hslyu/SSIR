@@ -52,8 +52,8 @@ def generate_config(exp_index):
         map["longitude_range"][1] - map["longitude_range"][0]
     )
     config = {
-        "num_maritime_basestations": int(area_size / 7),
-        "num_ground_basestations": int(area_size / 6),
+        "num_maritime_basestations": int(area_size / 4),
+        "num_ground_basestations": int(area_size / 4),
         "num_haps_basestations": int(area_size / 50),
         "num_leo_basestations": int(area_size / 60),
         "num_users": int(area_size / 10),
@@ -157,7 +157,7 @@ class DataManager:
             self.bbox_gdf, num_leo_basestations
         )
         users_points = self.generate_random_points_within_gdf(
-            self.bbox_gdf, num_users, 20
+            self.bbox_gdf, num_users, 50
         )
         node_point_list = [
             source_basestation_point,
@@ -302,22 +302,47 @@ class DataManager:
 
         # Change the location of source node connected with at least 5 nodes.
         source = graph.nodes[0]
-        while len(source.get_children()) < 5:
-            # Remove the edges connected to the source node
+        while True:
+            count = 0
             for node in source.get_children():
-                graph.remove_edge(source.get_id(), node.get_id())
+                if (
+                    node.basestation_type.name == bs.BaseStationType.HAPS.name
+                    or node.basestation_type.name == bs.BaseStationType.LEO.name
+                ):
+                    count += 1
+            if count > 1:
+                break
 
-            # Generate a new source node
-            source_basestation_point = self.generate_source_point(self.gdf_list[0], 0)
-            self.node_gdf_list[0] = gpd.GeoDataFrame(
-                geometry=source_basestation_point, crs=self.target_crs
-            )
-            # Update the source node position
-            source._position = np.array(
-                [source_basestation_point[0].x, source_basestation_point[0].y, 0]
-            )
-            # Add the source node to the graph
-            graph.connect_reachable_nodes(target_node_id=0)
+            graph.reset()
+            for node in graph.basestations:
+                if (
+                    node.basestation_type.name == bs.BaseStationType.HAPS.name
+                    or node.basestation_type.name == bs.BaseStationType.LEO.name
+                ):
+                    # Re-position the node
+                    node._position[0] = random.uniform(
+                        self.longitude_range[0], self.longitude_range[1]
+                    )
+                    node._position[1] = random.uniform(
+                        self.latitude_range[0], self.latitude_range[1]
+                    )
+            graph.connect_reachable_nodes()
+
+            # # Remove the edges connected to the source node
+            # for node in source.get_children():
+            #     graph.remove_edge(source.get_id(), node.get_id())
+            #
+            # # Generate a new source node
+            # source_basestation_point = self.generate_source_point(self.gdf_list[0], 0)
+            # self.node_gdf_list[0] = gpd.GeoDataFrame(
+            #     geometry=source_basestation_point, crs=self.target_crs
+            # )
+            # # Update the source node position
+            # source._position = np.array(
+            #     [source_basestation_point[0].x, source_basestation_point[0].y, 0]
+            # )
+            # # Add the source node to the graph
+            # graph.connect_reachable_nodes(target_node_id=0)
 
         costs, predecessors = pf.astar.a_star(graph, metric="distance")
         disconnected_uid_list = []

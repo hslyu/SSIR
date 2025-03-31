@@ -16,9 +16,7 @@ def get_solution_graph(
 ) -> bs.IABRelayGraph:
     """
     Performs a brute-force style solution search by generating multiple shortest-path candidates
-    and assigning each user to the best candidate path. Unlike the old version that created
-    numerous graph copies, this approach minimizes graph copying by only copying the original
-    graph once per trial, and it uses in-place edge modifications for path testing.
+    and assigning each user to the best candidate path.
 
     Args:
         graph (bs.IABRelayGraph): The base graph (including source/base stations and users).
@@ -106,34 +104,29 @@ def get_solution_graph(
     return best_graph
 
 
-def get_aborescence_graph(graph: bs.IABRelayGraph, path: List[int]) -> List[tuple]:
+def get_aborescence_graph(graph: bs.IABRelayGraph, path: List[int]):
     """
-    In-place function that adds edges from the given path into the graph, starting from the end node
-    and going backwards to its parent. Returns the edges that were actually added.
+    Get the aborescence graph from the path.
 
-    Args:
-        graph (bs.IABRelayGraph): The graph to update.
-        path (List[int]): A list of node IDs representing the path from source to user.
-
-    Returns:
-        List[tuple]: A list of (parent, child) edges that were added.
+    args:
+    - graph [IABRelayGraph]: the graph to which the path will be added
+    - path [List[int]]: the path to be added
     """
     added_edges = []
+    # Add the path to the graph
     for i in reversed(range(1, len(path))):
         child = path[i]
         parent = path[i - 1]
 
-        child_parents = graph.nodes[child].get_parent()
-        if len(child_parents) == 0:
+        parent_node_list = graph.nodes[child].get_parent()
+        if len(parent_node_list) == 0:
             graph.add_edge(parent, child)
             added_edges.append((parent, child))
-        elif len(child_parents) == 1:
-            # The child node already has a single parent, so stop
+        elif len(parent_node_list) == 1:
             break
         else:
-            raise ValueError("Multiple parents detected for one node.")
+            raise ValueError("Multiple parents detected.")
 
-    # Recompute hops for this user's final node (i.e., path[-1])
     graph.compute_hops_for_one_user(path[-1])
     return added_edges
 
@@ -147,14 +140,13 @@ def remove_added_edges(graph: bs.IABRelayGraph, user_id: int, added_edges: List[
         user_id (int): The user node ID whose edges are removed.
         added_edges (List[tuple]): The edges (parent, child) that were previously added.
     """
-    # Reset user's hops
     user = graph.nodes[user_id]
     user.hops = 0
 
     # Remove each of the added edges from the graph
     for p, c in added_edges:
-        if user in graph.nodes[p].connected_user:
-            graph.nodes[p].connected_user.remove(user)
+        # Remove the hop information
+        graph.nodes[p].connected_user.remove(user)
         graph.remove_edge(p, c)
 
 
@@ -197,23 +189,18 @@ def get_all_shortest_paths(
     graph: bs.IABRelayGraph, predecessors_list: List[dict]
 ) -> Dict[int, List[List[int]]]:
     """
-    Collects all shortest paths for each user based on multiple predecessor dictionaries.
-    For example, each predecessor dictionary might come from a different A* metric.
+    Compute all shortest paths for all users and all predecessors.
 
-    Args:
-        graph (bs.IABRelayGraph): The graph that includes all users.
-        predecessors_list (List[dict]): A list of predecessor maps from different A* runs.
-
-    Returns:
-        Dict[int, List[List[int]]]:
-            Keys are user IDs; values are lists of path lists for that user
-            across different predecessor dictionaries.
+    return:
+        paths_dict: {user_id: [ path_from_predecessors_0, ..., path_from_predecessors_n ]}
     """
     paths_dict: Dict[int, List[List[int]]] = {}
-    for user in graph.users:
-        uid = user.get_id()
-        paths_dict[uid] = []
+    user_ids = [u.get_id() for u in graph.users]
+
+    for user_id in user_ids:
+        paths_dict[user_id] = []
         for preds in predecessors_list:
-            spath = get_shortest_path(preds, uid)
-            paths_dict[uid].append(spath)
+            # precomputed shortest path for this user and this predecessor
+            spath = get_shortest_path(preds, user_id)
+            paths_dict[user_id].append(spath)
     return paths_dict

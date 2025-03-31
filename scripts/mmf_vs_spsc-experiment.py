@@ -1,5 +1,5 @@
-import concurrent.futures
 import json
+import multiprocessing
 import os
 from collections import defaultdict
 
@@ -13,7 +13,7 @@ from ssir.pathfinder import astar, bruteforce, genetic, montecarlo
 
 
 def save_config(config, dir_path, filename="config.json"):
-    """Save config dictionary as a JSON file."""
+    # Save config dictionary as a JSON file
     os.makedirs(dir_path, exist_ok=True)
     filepath = os.path.join(dir_path, filename)
     with open(filepath, "w") as f:
@@ -22,9 +22,7 @@ def save_config(config, dir_path, filename="config.json"):
 
 def load_exp_graph(exp_id, env_dir):
     """
-    For a given exp_id, check if config.json and graph.pkl exist in env_dir/exp_{exp_id:03d}.
-    If they do, load them. Otherwise, generate a new config & graph, then save them.
-    Returns (config, graph).
+    Load existing config and graph for exp_id, or generate new ones if not found.
     """
     exp_dir = os.path.join(env_dir, f"exp_{exp_id:03d}")
     os.makedirs(exp_dir, exist_ok=True)
@@ -33,19 +31,17 @@ def load_exp_graph(exp_id, env_dir):
     graph_path = os.path.join(exp_dir, "graph.pkl")
 
     if os.path.isfile(config_path) and os.path.isfile(graph_path):
-        # Load existing config
+        # Load existing config and graph
         with open(config_path, "r") as f:
             config = json.load(f)
-        # Load existing graph
         loaded_graph = bs.IABRelayGraph()
         loaded_graph.load_graph(graph_path, pkl=True)
         return config, loaded_graph
     else:
-        # Create a new config
+        # Create new config and graph
         config = env.generate_config(exp_id)
         save_config(config, exp_dir, "config.json")
 
-        # Create a new graph
         dm = env.DataManager(**config)
         new_graph = dm.generate_master_graph()
         new_graph.save_graph(graph_path, pkl=True)
@@ -85,14 +81,14 @@ def run_schemes(graph):
     scheme_results["genetic"] = (g_genetic, g_genetic.compute_network_throughput())
 
     # Montecarlo
-    g_montecarlo = montecarlo.get_solution_graph(graph)
+    g_montecarlo = montecarlo.get_solution_graph(graph, 100)
     scheme_results["montecarlo"] = (
         g_montecarlo,
         g_montecarlo.compute_network_throughput(),
     )
 
     # Bruteforce
-    g_bruteforce = bruteforce.get_solution_graph(graph)
+    g_bruteforce = bruteforce.get_solution_graph(graph, 2000, 10, 200)
     scheme_results["bruteforce"] = (
         g_bruteforce,
         g_bruteforce.compute_network_throughput(),
@@ -103,7 +99,7 @@ def run_schemes(graph):
 
 def run_one_experiment(threshold, exp_id, base_dir, env_dir):
     """
-    Single experiment for a given (threshold, exp_id).
+    Run a single experiment for a given (threshold, exp_id).
     Returns (threshold, throughput_dict, summary_str).
     """
     # Load or create config and graph
@@ -120,41 +116,42 @@ def run_one_experiment(threshold, exp_id, base_dir, env_dir):
     exp_dir = os.path.join(threshold_dir, f"exp_{exp_id:03d}")
     os.makedirs(exp_dir, exist_ok=True)
 
-    # Collect throughput for saving and printing
     throughput_dict = {}
     result_str_parts = []
     for scheme_name, (scheme_graph, throughput) in scheme_results.items():
-        # Save graph as solution_<scheme>.pkl
+        # Save the graph as solution_<scheme>.pkl
         graph_path = os.path.join(exp_dir, f"solution_{scheme_name}.pkl")
         scheme_graph.save_graph(graph_path, pkl=True)
 
         throughput_dict[scheme_name] = throughput
         result_str_parts.append(f"{scheme_name}={throughput:.2f}")
 
-    # Save all throughputs in one result.json
+    # Save the throughput results in result.json
     result_path = os.path.join(exp_dir, "result.json")
     with open(result_path, "w") as f:
         json.dump(throughput_dict, f, indent=4)
 
-    # Build a summary string
+    # Build summary string including experiment index
     summary_str = f"[Exp] Threshold={threshold:.4f}, Exp={exp_id:03d} | " + " ".join(
         result_str_parts
     )
-
     return threshold, throughput_dict, summary_str
+
+
+def run_task(args):
+    # Unpack arguments and execute a single experiment task
+    return run_one_experiment(*args)
 
 
 def main_experiment():
     """
-    Demonstrates real-time partial results using concurrent.futures.ProcessPoolExecutor.
-    - Each (threshold, exp_id) is submitted as an individual task.
-    - We gather results as they complete (as_completed).
-    - We keep a global progress bar (tqdm), incremented once per completed task.
-    - Whenever all tasks for a threshold have arrived, print an average summary.
+    Run experiments in parallel using multiprocessing Pool with maxtasksperchild=1.
+    After each task finishes, print progress [completed/total] and the experiment summary.
+    The tqdm progress bar is fixed at the top, and outputs are printed below.
     """
     raw_logspace = np.logspace(-1, -4, 15)
     thresholds_to_test = 1 - raw_logspace
-    num_experiments = 10
+    num_experiments = 300
 
     base_dir = "./results_mmf_vs_spsc"
     os.makedirs(base_dir, exist_ok=True)
@@ -162,51 +159,44 @@ def main_experiment():
     env_dir = os.path.join(base_dir, "env")
     os.makedirs(env_dir, exist_ok=True)
 
-    # Prepare all tasks
-    tasks = [(t, e) for t in thresholds_to_test for e in range(num_experiments)]
+    # Prepare all tasks: (threshold, exp_id, base_dir, env_dir)
+    tasks = [
+        (t, e, base_dir, env_dir)
+        for t in thresholds_to_test
+        for e in range(num_experiments)
+    ]
     total_tasks = len(tasks)
-
-    # This dict accumulates results for each threshold
-    # threshold -> [throughput_dict, throughput_dict, ...] up to num_experiments
     threshold_results_map = defaultdict(list)
+    completed = 0
 
-    print(f"Total tasks: {total_tasks}")
-    with tqdm(total=total_tasks, desc="Overall Progress") as pbar:
-        # Use a process pool
-        with concurrent.futures.ProcessPoolExecutor(max_workers=None) as executor:
-            # Submit all tasks
-            future_map = {
-                executor.submit(run_one_experiment, t, e, base_dir, env_dir): (t, e)
-                for (t, e) in tasks
-            }
+    # Set up tqdm progress bar fixed at the top (position=0)
+    pbar = tqdm(total=total_tasks, desc="Overall Progress", position=0, leave=True)
 
-            # as_completed gives us futures in the order they finish
-            for future in concurrent.futures.as_completed(future_map):
-                pbar.update(1)
-                threshold, throughput_dict, summary_str = future.result()
+    # Create a multiprocessing Pool with maxtasksperchild=1 to mitigate memory leakage
+    with multiprocessing.Pool() as pool:
+        # Use imap_unordered to process tasks as they complete
+        for result in pool.imap_unordered(run_task, tasks):
+            completed += 1
+            pbar.update(1)
+            threshold, throughput_dict, summary_str = result
 
-                current_count = pbar.n
-                total_count = pbar.total
+            # Print the progress and summary; tqdm.write ensures the progress bar stays fixed
+            tqdm.write(f"[{completed}/{total_tasks}] {summary_str}")
 
-                # Print partial results immediately
-                print(f"[{current_count}/{total_count}] {summary_str}")
+            # Accumulate results per threshold
+            threshold_results_map[threshold].append(throughput_dict)
+            if len(threshold_results_map[threshold]) == num_experiments:
+                aggregate = {}
+                for td in threshold_results_map[threshold]:
+                    for scheme, val in td.items():
+                        aggregate[scheme] = aggregate.get(scheme, 0) + val
+                avg_summary = {k: v / num_experiments for k, v in aggregate.items()}
+                avg_str_parts = [f"{k}={v:.2f}" for k, v in avg_summary.items()]
+                tqdm.write(
+                    f"[Summary] Threshold={threshold:.4f} | " + " ".join(avg_str_parts)
+                )
 
-                # Accumulate results
-                threshold_results_map[threshold].append(throughput_dict)
-
-                # If threshold is fully done, we can compute average
-                if len(threshold_results_map[threshold]) == num_experiments:
-                    aggregate = {}
-                    for td in threshold_results_map[threshold]:
-                        for scheme, val in td.items():
-                            aggregate[scheme] = aggregate.get(scheme, 0) + val
-                    avg_summary = {k: v / num_experiments for k, v in aggregate.items()}
-                    avg_str_parts = [f"{k}={v:.2f}" for k, v in avg_summary.items()]
-                    print(
-                        f"[Summary] Threshold={threshold:.4f} | "
-                        + " ".join(avg_str_parts)
-                    )
-
+    pbar.close()
     print("All experiments finished.")
 
 
