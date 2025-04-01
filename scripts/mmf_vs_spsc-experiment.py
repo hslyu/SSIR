@@ -1,6 +1,7 @@
 import json
 import multiprocessing
 import os
+import time
 from collections import defaultdict
 
 import numpy as np
@@ -9,7 +10,14 @@ from tqdm import tqdm
 # ssir-related imports
 import ssir.environment as env
 from ssir import basestations as bs
-from ssir.pathfinder import astar, bruteforce, genetic, montecarlo
+from ssir.pathfinder import (
+    astar,
+    bruteforce,
+    bruteforce_fast,
+    genetic,
+    greedy,
+    montecarlo,
+)
 
 
 def save_config(config, dir_path, filename="config.json"):
@@ -81,14 +89,21 @@ def run_schemes(graph):
     scheme_results["genetic"] = (g_genetic, genetic_throughput)
 
     # Montecarlo
-    g_montecarlo = montecarlo.get_solution_graph(graph, 300)
+    g_montecarlo = montecarlo.get_solution_graph(graph, 100, 5, 20, verbose=False)
     scheme_results["montecarlo"] = (
         g_montecarlo,
         g_montecarlo.compute_network_throughput(),
     )
 
+    # Greedy
+    g_greedy = greedy.get_solution_graph(graph, 50, verbose=False)
+    scheme_results["greedy"] = (
+        g_greedy,
+        g_greedy.compute_network_throughput(),
+    )
+
     # Bruteforce
-    g_bruteforce = bruteforce.get_solution_graph(graph, 2000, 10, 50)
+    g_bruteforce = bruteforce.get_solution_graph(graph, 2000, verbose=False)
     scheme_results["bruteforce"] = (
         g_bruteforce,
         g_bruteforce.compute_network_throughput(),
@@ -118,13 +133,13 @@ def run_one_experiment(threshold, exp_id, base_dir, env_dir):
 
     throughput_dict = {}
     result_str_parts = []
-    for scheme_name, (scheme_graph, throughput) in scheme_results.items():
+    for scheme_name, (scheme_graph, throughput, t) in scheme_results.items():
         # Save the graph as solution_<scheme>.pkl
         graph_path = os.path.join(exp_dir, f"solution_{scheme_name}.pkl")
         scheme_graph.save_graph(graph_path, pkl=True)
 
         throughput_dict[scheme_name] = throughput
-        result_str_parts.append(f"{scheme_name}={throughput:.2f}")
+        result_str_parts.append(f"{scheme_name}={throughput:.2f}, {int(t)}s |")
 
     # Save the throughput results in result.json
     result_path = os.path.join(exp_dir, "result.json")
@@ -151,8 +166,8 @@ def main_experiment():
     """
     raw_logspace = np.logspace(-1, -4, 15, base=10)
     thresholds_to_test = 1 - raw_logspace
-    start = 0
-    num_experiments = 100
+    start = 300
+    num_experiments = 50
 
     base_dir = "./results_mmf_vs_spsc"
     os.makedirs(base_dir, exist_ok=True)
@@ -174,7 +189,7 @@ def main_experiment():
     pbar = tqdm(total=total_tasks, desc="Overall Progress", position=0, leave=True)
 
     # Create a multiprocessing Pool with maxtasksperchild=1 to mitigate memory leakage
-    with multiprocessing.Pool(processes=32, maxtasksperchild=1) as pool:
+    with multiprocessing.Pool(processes=15, maxtasksperchild=1) as pool:
         # Use imap_unordered to process tasks as they complete
         for result in pool.imap_unordered(run_task, tasks):
             completed += 1
