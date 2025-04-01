@@ -131,13 +131,13 @@ def run_one_experiment(threshold, exp_id, base_dir, env_dir):
 
     throughput_dict = {}
     result_str_parts = []
-    for scheme_name, (scheme_graph, throughput, t) in scheme_results.items():
+    for scheme_name, (scheme_graph, throughput) in scheme_results.items():
         # Save the graph as solution_<scheme>.pkl
         graph_path = os.path.join(exp_dir, f"solution_{scheme_name}.pkl")
         scheme_graph.save_graph(graph_path, pkl=True)
 
         throughput_dict[scheme_name] = throughput
-        result_str_parts.append(f"{scheme_name}={throughput:.2f}, {int(t)}s |")
+        result_str_parts.append(f"{scheme_name}={throughput:.2f} ")
 
     # Save the throughput results in result.json
     result_path = os.path.join(exp_dir, "result.json")
@@ -164,7 +164,7 @@ def main_experiment():
     """
     raw_logspace = np.logspace(-1, -4, 10, base=10)
     thresholds_to_test = 1 - raw_logspace
-    start = 0
+    start = 200
     num_experiments = 200
 
     base_dir = "./results_mmf_vs_spsc"
@@ -187,7 +187,7 @@ def main_experiment():
     pbar = tqdm(total=total_tasks, desc="Overall Progress", position=0, leave=True)
 
     # Create a multiprocessing Pool with maxtasksperchild=1 to mitigate memory leakage
-    with multiprocessing.Pool(processes=31, maxtasksperchild=1) as pool:
+    with multiprocessing.Pool(processes=20, maxtasksperchild=1) as pool:
         # Use imap_unordered to process tasks as they complete
         for result in pool.imap_unordered(run_task, tasks):
             completed += 1
