@@ -1,7 +1,6 @@
 import json
 import multiprocessing
 import os
-import time
 from collections import defaultdict
 
 import numpy as np
@@ -13,7 +12,6 @@ from ssir import basestations as bs
 from ssir.pathfinder import (
     astar,
     bruteforce,
-    bruteforce_fast,
     genetic,
     greedy,
     montecarlo,
@@ -189,7 +187,7 @@ def main_experiment():
     pbar = tqdm(total=total_tasks, desc="Overall Progress", position=0, leave=True)
 
     # Create a multiprocessing Pool with maxtasksperchild=1 to mitigate memory leakage
-    with multiprocessing.Pool(processes=15, maxtasksperchild=1) as pool:
+    with multiprocessing.Pool(processes=31, maxtasksperchild=1) as pool:
         # Use imap_unordered to process tasks as they complete
         for result in pool.imap_unordered(run_task, tasks):
             completed += 1
