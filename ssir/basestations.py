@@ -551,16 +551,29 @@ class IABRelayGraph:
             #         break
 
     def compute_hops_for_one_user(self, user_id):
+        # Save the user node
         user = self.nodes[user_id]
         current_node = user
+
+        # Keep track of visited nodes
+        visited = set()
+
         while True:
             assert current_node is not None, f"Current node {current_node} is None."
+
+            # Check if we have visited this node before
+            if current_node in visited:
+                # Cycle detected
+                user.hops = 1e10  # To prevent the graph is selected.
+                break
+            visited.add(current_node)
+
             if current_node.has_parent():
                 user.hops += 1
                 parent_nodes: List[AbstractNode] = current_node.get_parent()
-                assert (
-                    len(parent_nodes) == 1
-                ), f"There are more than one parent node. Current node: {current_node} Parent node: {parent_nodes}"
+                assert len(parent_nodes) == 1, (
+                    f"There are more than one parent node. Current node: {current_node} Parent node: {parent_nodes}"
+                )
                 current_node = parent_nodes[0]
                 current_node.connected_user.append(user)
             else:
@@ -600,9 +613,9 @@ class IABRelayGraph:
             raise ValueError(f"Node {node_id} does not exist in the graph.")
 
         from_node = self.nodes[node_id]
-        assert isinstance(
-            from_node, BaseStation
-        ), f"Node {node_id} is not a base station."
+        assert isinstance(from_node, BaseStation), (
+            f"Node {node_id} is not a base station."
+        )
 
         maximum_link_distance = from_node.compute_maximum_link_distance()
         maximum_link_distance_los = from_node.compute_maximum_link_distance(is_los=True)
