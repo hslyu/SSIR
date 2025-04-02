@@ -207,7 +207,7 @@ def main_experiment():
                 avg_summary = {k: v / num_experiments for k, v in aggregate.items()}
                 avg_str_parts = [f"{k}={v:.2f}" for k, v in avg_summary.items()]
                 tqdm.write(
-                    f"[Summary] Threshold={threshold:.4f} | " + " ".join(avg_str_parts)
+                    f"[Summary] Threshold={threshold:.6f} | " + " ".join(avg_str_parts)
                 )
 
     pbar.close()
