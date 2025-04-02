@@ -125,7 +125,7 @@ def run_one_experiment(threshold, exp_id, base_dir, env_dir):
     scheme_results = run_schemes(graph)
 
     # Save results under spsc_{threshold}/exp_{exp_id}/
-    threshold_dir = os.path.join(base_dir, f"spsc_{threshold:.4f}")
+    threshold_dir = os.path.join(base_dir, f"spsc_{threshold:.6f}")
     exp_dir = os.path.join(threshold_dir, f"exp_{exp_id:03d}")
     os.makedirs(exp_dir, exist_ok=True)
 
@@ -145,7 +145,7 @@ def run_one_experiment(threshold, exp_id, base_dir, env_dir):
         json.dump(throughput_dict, f, indent=4)
 
     # Build summary string including experiment index
-    summary_str = f"[Exp] Threshold={threshold:.4f}, Exp={exp_id:03d} | " + " ".join(
+    summary_str = f"Threshold={threshold:.6f}, Exp={exp_id:03d} | " + " ".join(
         result_str_parts
     )
     return threshold, throughput_dict, summary_str
