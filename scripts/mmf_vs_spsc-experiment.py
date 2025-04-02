@@ -162,10 +162,12 @@ def main_experiment():
     After each task finishes, print progress [completed/total] and the experiment summary.
     The tqdm progress bar is fixed at the top, and outputs are printed below.
     """
-    raw_logspace = np.logspace(-1, -5, 13, base=10)[-3:]
+    raw_logspace = np.concatenate(
+        (np.logspace(-5, -4, 7, base=10)[:-1], np.logspace(-1, -4, 13, base=10))
+    )
     thresholds_to_test = 1 - raw_logspace
-    start = 600
-    num_experiments = 100
+    start = 0
+    num_experiments = 1000
 
     base_dir = "./results_mmf_vs_spsc"
     os.makedirs(base_dir, exist_ok=True)
