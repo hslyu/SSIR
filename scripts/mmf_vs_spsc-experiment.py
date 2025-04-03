@@ -163,7 +163,7 @@ def main_experiment():
     The tqdm progress bar is fixed at the top, and outputs are printed below.
     """
     raw_logspace = np.concatenate(
-        (np.logspace(-5, -4, 7, base=10)[:-1], np.logspace(-1, -4, 13, base=10))
+        (np.logspace(-5, -4, 7, base=10)[:-1], np.logspace(-4, -1, 10, base=10))
     )
     thresholds_to_test = 1 - raw_logspace
     start = 0
