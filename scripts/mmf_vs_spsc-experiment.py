@@ -61,7 +61,7 @@ def run_schemes(graph):
     """
     scheme_results = {}
 
-    # A* distance
+    # A * distance
     costs, predecessors = astar.a_star(graph, metric="distance")
     g_distance = astar.get_solution_graph(graph, predecessors)
     scheme_results["astar_distance"] = (
@@ -166,8 +166,8 @@ def main_experiment():
         (np.logspace(-5, -4, 7, base=10)[:-1], np.logspace(-4, -1, 10, base=10))
     )
     thresholds_to_test = 1 - raw_logspace
-    start = 0
-    num_experiments = 1000
+    start = 1000
+    num_experiments = 200
 
     base_dir = "./results_mmf_vs_spsc"
     os.makedirs(base_dir, exist_ok=True)
