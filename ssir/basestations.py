@@ -60,7 +60,7 @@ class BaseStationType(Enum):
         receive_antenna_gain=25,  # in dBi
         antenna_gain_to_noise_temperature=1.5,  # in dB
         pathloss_exponent=2.7,  # dimensionless
-        eavesdropper_density=1e-3,  # in km^-2
+        eavesdropper_density=5e-3,  # in km^-2
         maximum_link_distance=150,  # in km
     )
     GROUND = BaseStationConfig(
@@ -72,7 +72,7 @@ class BaseStationType(Enum):
         receive_antenna_gain=25,  # in dBi
         antenna_gain_to_noise_temperature=1.5,  # in dB
         pathloss_exponent=2.8,  # dimensionless
-        eavesdropper_density=2e-3,  # in km^-2
+        eavesdropper_density=1e-2,  # in km^-2
         maximum_link_distance=150,  # in km
     )
     HAPS = BaseStationConfig(
@@ -571,9 +571,9 @@ class IABRelayGraph:
             if current_node.has_parent():
                 user.hops += 1
                 parent_nodes: List[AbstractNode] = current_node.get_parent()
-                assert len(parent_nodes) == 1, (
-                    f"There are more than one parent node. Current node: {current_node} Parent node: {parent_nodes}"
-                )
+                assert (
+                    len(parent_nodes) == 1
+                ), f"There are more than one parent node. Current node: {current_node} Parent node: {parent_nodes}"
                 current_node = parent_nodes[0]
                 current_node.connected_user.append(user)
             else:
@@ -613,9 +613,9 @@ class IABRelayGraph:
             raise ValueError(f"Node {node_id} does not exist in the graph.")
 
         from_node = self.nodes[node_id]
-        assert isinstance(from_node, BaseStation), (
-            f"Node {node_id} is not a base station."
-        )
+        assert isinstance(
+            from_node, BaseStation
+        ), f"Node {node_id} is not a base station."
 
         maximum_link_distance = from_node.compute_maximum_link_distance()
         maximum_link_distance_los = from_node.compute_maximum_link_distance(is_los=True)
