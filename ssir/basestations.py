@@ -108,6 +108,32 @@ class BaseStationType(Enum):
     def __repr__(self):
         return f"BaseStationType({self.name})"
 
+    @classmethod
+    def _missing_(cls, value):
+        # When deserialized BaseStationConfig does not match any enum due to minor differences
+        if not isinstance(value, BaseStationConfig):
+            raise ValueError(f"Cannot create {cls} from {value}")
+
+        for member in cls:
+            member_cfg = member.value
+            if (
+                member_cfg.power_capacity == value.power_capacity
+                and member_cfg.minimum_transit_power_ratio
+                == value.minimum_transit_power_ratio
+                and member_cfg.carrier_frequency == value.carrier_frequency
+                and member_cfg.bandwidth == value.bandwidth
+                and member_cfg.transmit_antenna_gain == value.transmit_antenna_gain
+                and member_cfg.receive_antenna_gain == value.receive_antenna_gain
+                and member_cfg.antenna_gain_to_noise_temperature
+                == value.antenna_gain_to_noise_temperature
+                and member_cfg.pathloss_exponent == value.pathloss_exponent
+                and member_cfg.maximum_link_distance == value.maximum_link_distance
+            ):
+                # Use the current enum definition without modifying it
+                return member
+
+        raise ValueError(f"No matching BaseStationType found for {value}")
+
 
 class AbstractNode(ABC):
     """An abstract node class."""
