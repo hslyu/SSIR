@@ -60,7 +60,7 @@ class BaseStationType(Enum):
         receive_antenna_gain=25,  # in dBi
         antenna_gain_to_noise_temperature=1.5,  # in dB
         pathloss_exponent=2.7,  # dimensionless
-        eavesdropper_density=5e-3,  # in km^-2
+        eavesdropper_density=1e-3,  # in km^-2
         maximum_link_distance=150,  # in km
     )
     GROUND = BaseStationConfig(
@@ -72,7 +72,7 @@ class BaseStationType(Enum):
         receive_antenna_gain=25,  # in dBi
         antenna_gain_to_noise_temperature=1.5,  # in dB
         pathloss_exponent=2.8,  # dimensionless
-        eavesdropper_density=1e-2,  # in km^-2
+        eavesdropper_density=2e-3,  # in km^-2
         maximum_link_distance=150,  # in km
     )
     HAPS = BaseStationConfig(
@@ -84,7 +84,7 @@ class BaseStationType(Enum):
         receive_antenna_gain=25,  # in dBi
         antenna_gain_to_noise_temperature=1.5,  # in dB
         pathloss_exponent=2.6,  # dimensionless
-        eavesdropper_density=3e-4,  # in km^-2
+        eavesdropper_density=1.5e-3,  # in km^-2
         maximum_link_distance=500,  # in km
     )
     LEO = BaseStationConfig(
@@ -96,7 +96,7 @@ class BaseStationType(Enum):
         receive_antenna_gain=38.5,  # in dBi
         antenna_gain_to_noise_temperature=13,  # in dB
         pathloss_exponent=2.4,  # dimensionless
-        eavesdropper_density=1e-4,  # in km^-2
+        eavesdropper_density=5e-4,  # in km^-2
         maximum_link_distance=900,  # in km
     )
 
