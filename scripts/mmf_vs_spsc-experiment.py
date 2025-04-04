@@ -166,8 +166,8 @@ def main_experiment():
         (np.logspace(-5, -4, 7, base=10)[:-1], np.logspace(-4, -1, 10, base=10))
     )
     thresholds_to_test = 1 - raw_logspace
-    start = 1000
-    num_experiments = 200
+    start = 0
+    num_experiments = 1000
 
     base_dir = "./results_mmf_vs_spsc"
     os.makedirs(base_dir, exist_ok=True)
@@ -189,7 +189,7 @@ def main_experiment():
     pbar = tqdm(total=total_tasks, desc="Overall Progress", position=0, leave=True)
 
     # Create a multiprocessing Pool with maxtasksperchild=1 to mitigate memory leakage
-    with multiprocessing.Pool(processes=15, maxtasksperchild=1) as pool:
+    with multiprocessing.Pool(processes=os.cpu_count(), maxtasksperchild=1) as pool:
         # Use imap_unordered to process tasks as they complete
         for result in pool.imap_unordered(run_task, tasks):
             completed += 1
