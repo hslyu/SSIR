@@ -41,8 +41,8 @@ def generate_hppp_on_bbox(lat_min, lat_max, lon_min, lon_max, density):
 
 
 def process_experiment(args):
-    """Process a single experiment: return (scheme -> secrecy_rate) dictionary"""
-    exp_id, threshold_str, threshold, base_dir = args
+    """Run one experiment 10 times and return average secrecy rate per scheme."""
+    exp_id, threshold_str, threshold, base_dir, num_repeat = args
 
     env_dir = os.path.join(base_dir, "env", f"exp_{exp_id:03d}")
     config_path = os.path.join(env_dir, "config.json")
@@ -55,27 +55,6 @@ def process_experiment(args):
     lat_min, lat_max = config["latitude_range"]
     lon_min, lon_max = config["longitude_range"]
 
-    def get_eves(density, altitude):
-        lat, lon = generate_hppp_on_bbox(lat_min, lat_max, lon_min, lon_max, density)
-        return np.column_stack([lat, lon, np.full(len(lat), altitude)])
-
-    eves_maritime = get_eves(
-        bs.BaseStationType.MARITIME.config.eavesdropper_density,
-        bs.environmental_variables.maritime_basestations_altitude,
-    )
-    eves_ground = get_eves(
-        bs.BaseStationType.GROUND.config.eavesdropper_density,
-        bs.environmental_variables.ground_basestations_altitude,
-    )
-    eves_haps = get_eves(
-        bs.BaseStationType.HAPS.config.eavesdropper_density,
-        bs.environmental_variables.haps_basestations_altitude,
-    )
-    eves_leo = get_eves(
-        bs.BaseStationType.LEO.config.eavesdropper_density,
-        bs.environmental_variables.leo_basestations_altitude,
-    )
-
     exp_dir = os.path.join(base_dir, f"spsc_{threshold_str}", f"exp_{exp_id:03d}")
     schemes = [
         "astar_distance",
@@ -87,25 +66,56 @@ def process_experiment(args):
         "bruteforce",
     ]
 
-    result = {}
-    for scheme in schemes:
-        solution_file = os.path.join(exp_dir, f"solution_{scheme}.pkl")
-        if not os.path.isfile(solution_file):
-            continue
+    # Initialize scheme -> list of results
+    scheme_results = {scheme: [] for scheme in schemes}
 
-        g = bs.IABRelayGraph()
-        g.load_graph(solution_file, pkl=True)
+    for _ in range(num_repeat):
 
-        mm_secrecy_rate = g.compute_network_secrecy_rate(
-            eves_maritime, eves_ground, eves_haps, eves_leo
+        def get_eves(density, altitude):
+            lat, lon = generate_hppp_on_bbox(
+                lat_min, lat_max, lon_min, lon_max, density
+            )
+            return np.column_stack([lat, lon, np.full(len(lat), altitude)])
+
+        eves_maritime = get_eves(
+            bs.BaseStationType.MARITIME.config.eavesdropper_density,
+            bs.environmental_variables.maritime_basestations_altitude,
         )
-        result[scheme] = mm_secrecy_rate
+        eves_ground = get_eves(
+            bs.BaseStationType.GROUND.config.eavesdropper_density,
+            bs.environmental_variables.ground_basestations_altitude,
+        )
+        eves_haps = get_eves(
+            bs.BaseStationType.HAPS.config.eavesdropper_density,
+            bs.environmental_variables.haps_basestations_altitude,
+        )
+        eves_leo = get_eves(
+            bs.BaseStationType.LEO.config.eavesdropper_density,
+            bs.environmental_variables.leo_basestations_altitude,
+        )
 
-    return result
+        for scheme in schemes:
+            solution_file = os.path.join(exp_dir, f"solution_{scheme}.pkl")
+            if not os.path.isfile(solution_file):
+                continue
+
+            g = bs.IABRelayGraph()
+            g.load_graph(solution_file, pkl=True)
+
+            mm_secrecy_rate = g.compute_network_secrecy_rate(
+                eves_maritime, eves_ground, eves_haps, eves_leo
+            )
+            scheme_results[scheme].append(mm_secrecy_rate)
+
+    # Return average over num_repeat
+    return {
+        scheme: float(np.mean(vals)) if vals else None
+        for scheme, vals in scheme_results.items()
+    }
 
 
 def evaluate_max_min_secrecy_rate():
-    base_dir = "/fast/hslyu/results_mmf_vs_spsc_3"
+    base_dir = "/fast/hslyu/mmf_result_1"
 
     raw_logspace = np.concatenate(
         (np.logspace(-5, -4, 7, base=10)[:-1], np.logspace(-4, -1, 10, base=10)[:-3])
@@ -113,6 +123,7 @@ def evaluate_max_min_secrecy_rate():
     thresholds_to_test = 1 - raw_logspace
     start_exp = 0
     num_experiments = 1000
+    num_repeat_per_exp = 10
 
     avg_secrecy_results = {}
 
@@ -130,13 +141,11 @@ def evaluate_max_min_secrecy_rate():
         ]
         scheme_accumulator = {scheme: [] for scheme in schemes}
 
-        # Prepare multiprocessing arguments
         task_args = [
-            (exp_id, threshold_str, threshold, base_dir)
+            (exp_id, threshold_str, threshold, base_dir, num_repeat_per_exp)
             for exp_id in range(start_exp, start_exp + num_experiments)
         ]
 
-        # Run with multiprocessing and tqdm progress bar
         with Pool(processes=cpu_count()) as pool:
             for result in tqdm(
                 pool.imap_unordered(process_experiment, task_args),
@@ -144,9 +153,9 @@ def evaluate_max_min_secrecy_rate():
                 desc=f"Threshold={threshold_str}",
             ):
                 for scheme, val in result.items():
-                    scheme_accumulator[scheme].append(val)
+                    if val is not None:
+                        scheme_accumulator[scheme].append(val)
 
-        # Compute averages
         avg_secrecy_results[threshold_str] = {
             scheme: float(np.mean(vals)) if vals else None
             for scheme, vals in scheme_accumulator.items()
