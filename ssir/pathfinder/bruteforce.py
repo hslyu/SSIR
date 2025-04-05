@@ -87,10 +87,10 @@ def get_solution_graph(
         if trial_throughput > best_throughput:
             best_throughput = trial_throughput
             best_graph = trial_graph
-            count = 0
-        else:
             if best_throughput > 1e-4:
-                count += 1
+                count = 0
+        else:
+            count += 1
             if count >= early_stop:
                 break
 
