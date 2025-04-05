@@ -695,9 +695,9 @@ class IABRelayGraph:
             if current_node.has_parent():
                 user.hops += 1
                 parent_nodes: list[AbstractNode] = current_node.get_parent()
-                assert (
-                    len(parent_nodes) == 1
-                ), f"There are more than one parent node. Current node: {current_node} Parent node: {parent_nodes}"
+                assert len(parent_nodes) == 1, (
+                    f"There are more than one parent node. Current node: {current_node} Parent node: {parent_nodes}"
+                )
                 current_node = parent_nodes[0]
                 current_node.connected_user.append(user)
             else:
@@ -737,9 +737,9 @@ class IABRelayGraph:
             raise ValueError(f"Node {node_id} does not exist in the graph.")
 
         from_node = self.nodes[node_id]
-        assert isinstance(
-            from_node, BaseStation
-        ), f"Node {node_id} is not a base station."
+        assert isinstance(from_node, BaseStation), (
+            f"Node {node_id} is not a base station."
+        )
 
         maximum_link_distance = from_node.compute_maximum_link_distance()
         maximum_link_distance_los = from_node.compute_maximum_link_distance(is_los=True)
@@ -876,7 +876,7 @@ class IABRelayGraph:
                 )
 
             secrecy_rate_list.append(secrecy_rate)
-        return min(secrecy_rate_list) if secrecy_rate_list else 0.0
+        return max(min(secrecy_rate_list), 0) if secrecy_rate_list else 0.0
 
     def save_graph(self, filepath: str, pkl=True):
         """
