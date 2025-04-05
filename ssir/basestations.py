@@ -36,6 +36,32 @@ def linear_to_dB(linear: float) -> float:
     return 10 * np.log10(linear)
 
 
+def geo_distances(pos1: np.ndarray, pos2s: np.ndarray) -> np.ndarray:
+    """
+    Compute vectorized Haversine + altitude distance between one position and multiple others.
+
+    pos1: shape (3,) - [lat, lon, alt]
+    pos2s: shape (N, 3) - array of [lat, lon, alt]
+    return: shape (N,) - array of distances
+    """
+    lat1, lon1, alt1 = np.radians(pos1[0]), np.radians(pos1[1]), pos1[2]
+    lat2 = np.radians(pos2s[:, 0])
+    lon2 = np.radians(pos2s[:, 1])
+    alt2 = pos2s[:, 2]
+
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * (np.sin(dlon / 2) ** 2)
+    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+
+    R = 6371.01  # km
+    horizontal_distance = R * c
+    altitude_difference = alt2 - alt1
+
+    return np.sqrt(horizontal_distance**2 + altitude_difference**2)
+
+
 @dataclass
 class BaseStationConfig:
     power_capacity: float  # in dBm
@@ -141,8 +167,8 @@ class AbstractNode(ABC):
     def __init__(self, node_id: int, position: NDArray, isGeographic: bool = True):
         self._node_id = node_id
         self._position = position
-        self._parent: List[AbstractNode] = []
-        self._children: List[AbstractNode] = []
+        self._parent: list[AbstractNode] = []
+        self._children: list[AbstractNode] = []
         self._isGeographic = isGeographic
 
     def get_position(self) -> NDArray:
@@ -188,10 +214,10 @@ class AbstractNode(ABC):
     def get_id(self) -> int:
         return self._node_id
 
-    def get_parent(self) -> List["AbstractNode"]:
+    def get_parent(self) -> list["AbstractNode"]:
         return self._parent
 
-    def get_children(self) -> List["AbstractNode"]:
+    def get_children(self) -> list["AbstractNode"]:
         return list(self._children)
 
     def has_children(self) -> bool:
@@ -237,7 +263,7 @@ class BaseStation(AbstractNode):
             isGeographic=isGeographic,
         )
         self.basestation_type = basestation_type
-        self.connected_user: List[User] = []
+        self.connected_user: list[User] = []
         self.transmission_power_density: float = 0.0
         self.jamming_power_density: float = 0.0
         self.throughput: float = 0.0
@@ -272,6 +298,76 @@ class BaseStation(AbstractNode):
 
         self.throughput = self.basestation_type.config.bandwidth * 1e6 / denominator
         return self.throughput
+
+    def compute_minimum_secrecy_rate(self, eves: np.ndarray) -> float:
+        """
+        Compute the minimum secrecy rate among this base station's connected users
+        given the eavesdroppers' positions.
+
+        eves: shape [N,3], each row is the (x, y, z) of an eavesdropper.
+
+        The secrecy rate for each user is:
+            R_sec = throughput * [ 1 - (spectral_efficiency / hops) * log2(1 + max_eve_snr) ],
+
+        where:
+        - spectral_efficiency = log2(1 + user_snr),
+        - max_eve_snr is the maximum among all eavesdroppers,
+          computed as:
+               tx_power_linear * np.random.exponential(1)
+               / (noise_linear + jamming_linear) / distance_to_eve.
+
+        Returns the minimum secrecy rate (float) among all connected users.
+        """
+        if not (self.connected_user and self.has_children()):
+            return float("inf")
+
+        throughput = self.compute_throughput()
+
+        # Convert power densities from dB to linear scale
+        tx_power_linear = dB_to_linear(self.transmission_power_density)
+        jamming_power_linear = dB_to_linear(self.jamming_power_density)
+        noise_power_linear = dB_to_linear(environmental_variables.noise_power_density)
+
+        # Compute distances to all eavesdroppers
+        eve_positions = np.array(eves)  # shape: (N_eves, 2)
+        dist_eves = geo_distances(
+            self.get_position(), eve_positions
+        )  # shape: (N_eves,)
+
+        # Sample channel fading from Exponential(1)
+        fading = np.random.exponential(
+            scale=1.0, size=eve_positions.shape[0]
+        )  # shape: (N_eves,)
+
+        # Compute eavesdropper SNRs
+        pathloss_exp = self.basestation_type.config.pathloss_exponent
+        eve_snrs = (
+            tx_power_linear
+            * fading
+            / (noise_power_linear + jamming_power_linear)
+            / np.power(dist_eves, pathloss_exp)
+        )
+
+        # Take the maximum SNR
+        max_eve_snr = np.max(eve_snrs)
+
+        # Calculate secrecy rate for each connected user
+        secrecy_rates = []
+        for node in self.get_children():
+            snr = self._compute_snr(node)
+            spectral_efficiency = np.log2(1 + snr)
+            if isinstance(node, User):
+                hops = node.hops
+            elif isinstance(node, BaseStation):
+                hops = min([user.hops for user in node.connected_user])
+            else:
+                raise ValueError("Unsupported node type.")
+            secrecy_rate = throughput * (
+                1 - spectral_efficiency / hops * np.log2(1 + max_eve_snr)
+            )
+            secrecy_rates.append(secrecy_rate)
+
+        return min(secrecy_rates)
 
     def _compute_snr(self, node, in_dB: bool = False) -> float:
         """
@@ -377,8 +473,6 @@ class BaseStation(AbstractNode):
         self.jamming_power_density = linear_to_dB(
             jamming_power_density_mW_over_Hz + 1e-16
         )
-        a = dB_to_linear(self.transmission_power_density)
-        b = dB_to_linear(self.jamming_power_density)
 
         return self.transmission_power_density, self.jamming_power_density
 
@@ -445,11 +539,11 @@ class User(AbstractNode):
 
 class IABRelayGraph:
     def __init__(self, environmental_variables=environmental_variables):
-        self.nodes: Dict[int, BaseStation | User] = {}
-        self.users: List[User] = []
-        self.basestations: List[BaseStation] = []
+        self.nodes: dict[int, BaseStation | User] = {}
+        self.users: list[User] = []
+        self.basestations: list[BaseStation] = []
 
-        self.adjacency_list: Dict[int, List[int]] = {}
+        self.adjacency_list: dict[int, list[int]] = {}
         self.environmental_variables = environmental_variables
         self.is_hop_computed = False
 
@@ -545,7 +639,7 @@ class IABRelayGraph:
         for user in self.users:
             user.hops = 0
 
-    def get_neighbors(self, node_id: int) -> List[int]:
+    def get_neighbors(self, node_id: int) -> list[int]:
         return self.adjacency_list.get(node_id, [])
 
     def compute_hops(self):
@@ -596,17 +690,17 @@ class IABRelayGraph:
 
             if current_node.has_parent():
                 user.hops += 1
-                parent_nodes: List[AbstractNode] = current_node.get_parent()
-                assert (
-                    len(parent_nodes) == 1
-                ), f"There are more than one parent node. Current node: {current_node} Parent node: {parent_nodes}"
+                parent_nodes: list[AbstractNode] = current_node.get_parent()
+                assert len(parent_nodes) == 1, (
+                    f"There are more than one parent node. Current node: {current_node} Parent node: {parent_nodes}"
+                )
                 current_node = parent_nodes[0]
                 current_node.connected_user.append(user)
             else:
                 break
 
     def connect_reachable_nodes(
-        self, target_node_id: Optional[int] = None, source_node_id: int = 0
+        self, target_node_id: int | None = None, source_node_id: int = 0
     ):
         """
         Connects all reachable nodes in the graph.
@@ -639,9 +733,9 @@ class IABRelayGraph:
             raise ValueError(f"Node {node_id} does not exist in the graph.")
 
         from_node = self.nodes[node_id]
-        assert isinstance(
-            from_node, BaseStation
-        ), f"Node {node_id} is not a base station."
+        assert isinstance(from_node, BaseStation), (
+            f"Node {node_id} is not a base station."
+        )
 
         maximum_link_distance = from_node.compute_maximum_link_distance()
         maximum_link_distance_los = from_node.compute_maximum_link_distance(is_los=True)
@@ -702,7 +796,7 @@ class IABRelayGraph:
         """
         return self.copy_graph_with_selected_nodes(list(self.nodes.keys()))
 
-    def copy_graph_with_selected_nodes(self, selected_nodes: List[int]):
+    def copy_graph_with_selected_nodes(self, selected_nodes: list[int]):
         """
         Create a new graph with the selected nodes.
         """
@@ -729,7 +823,7 @@ class IABRelayGraph:
 
         return new_graph
 
-    def compute_network_throughput(self, target_node_list: List[int] | None = None):
+    def compute_network_throughput(self, target_node_list: list[int] | None = None):
         self.compute_hops()
         if target_node_list is None:
             basestation_list = self.basestations[1:]
@@ -741,6 +835,44 @@ class IABRelayGraph:
             throughput = node.compute_throughput()
             throughput_list.append(throughput)
         return min(throughput_list)
+
+    def compute_network_secrecy_rate(
+        self,
+        eves_maritime: np.ndarray,
+        eves_ground: np.ndarray,
+        eves_haps: np.ndarray,
+        eves_leo: np.ndarray,
+    ) -> float:
+        """
+        Iterate through all base stations and compute the minimum secrecy rate.
+        Each base station uses the corresponding eaves array based on its station_type.
+
+        eves_maritime: shape [N_m, 3], each row is (x,y,z) for maritime eaves
+        eves_ground: shape [N_g, 3], each row is (x,y,z) for ground eaves
+        eves_haps: shape [N_h, 3], each row is (x,y,z) for HAPS eaves
+        eves_leo: shape [N_l, 3], each row is (x,y,z) for LEO eaves
+
+        Returns:
+            float: the minimum secrecy rate among all base stations in this graph.
+        """
+        self.compute_hops()
+        secrecy_rate_list = []
+        for node in self.basestations[1:]:
+            if node.basestation_type.name == BaseStationType.MARITIME.name:
+                secrecy_rate = node.compute_minimum_secrecy_rate(eves_maritime)
+            elif node.basestation_type.name == BaseStationType.GROUND.name:
+                secrecy_rate = node.compute_minimum_secrecy_rate(eves_ground)
+            elif node.basestation_type.name == BaseStationType.HAPS.name:
+                secrecy_rate = node.compute_minimum_secrecy_rate(eves_haps)
+            elif node.basestation_type.name == BaseStationType.LEO.name:
+                secrecy_rate = node.compute_minimum_secrecy_rate(eves_leo)
+            else:  # exception
+                raise ValueError(
+                    f"Unsupported base station type: {node.basestation_type.name}"
+                )
+
+            secrecy_rate_list.append(secrecy_rate)
+        return min(secrecy_rate_list) if secrecy_rate_list else 0.0
 
     def save_graph(self, filepath: str, pkl=True):
         """
@@ -932,85 +1064,6 @@ class IABRelayGraph:
         # Create and return the torch_geometric.data.Data object
         data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
         return data
-
-    # def to_torch_geometric(self, return_index_map=False):
-    #     """
-    #     Convert the graph to a torch_geometric.data.Data object.
-    #     """
-    #     # Create a mapping from node ID to index
-    #     node_idx_map = {}
-    #     node_features = []
-    #     for idx, (node_id, node) in enumerate(self.nodes.items()):
-    #         node_idx_map[node_id] = idx
-    #         # Initialize feature with an empty array
-    #         feature = np.empty(0, dtype=np.float32)
-    #
-    #         # Concatenate the node type into the feature
-    #         if node_id == 0:
-    #             feature = np.append(feature, 0)
-    #         elif isinstance(node, User):
-    #             feature = np.append(feature, 1)
-    #         else:  # BaseStation
-    #             feature = np.append(feature, 2)
-    #
-    #         # Concatenate the node position into the feature
-    #         feature = np.concatenate((feature, node.get_position()))
-    #         # Append additional attributes based on the node type
-    #         if isinstance(node, User):
-    #             configs = {
-    #                 "power_capacity": 0.0,
-    #                 "minimum_transit_power_ratio": 0.0,
-    #                 "carrier_frequency": 0.0,
-    #                 "bandwidth": 0.0,
-    #                 "transmit_antenna_gain": 0.0,
-    #                 "receive_antenna_gain": 0.0,
-    #                 "antenna_gain_to_noise_temperature": 0.0,
-    #                 "pathloss_exponent": 0.0,
-    #                 "eavesdropper_density": 0.0,
-    #             }
-    #             feature = np.concatenate((feature, np.array(list(configs.values()))))
-    #         elif isinstance(node, BaseStation):
-    #             feature = np.concatenate(
-    #                 (
-    #                     feature,
-    #                     np.array(list(vars(node.basestation_type.config).values())),
-    #                 )
-    #             )
-    #         node_features.append(feature)
-    #
-    #     # Prepare lists for edge indices and edge features
-    #     edge_index = []
-    #     edge_features = []
-    #     for from_node_id, neighbors in self.adjacency_list.items():
-    #         for to_node_id in neighbors:
-    #             from_node = self.nodes[from_node_id]
-    #             to_node = self.nodes[to_node_id]
-    #             # Compute the distance between nodes
-    #             distance = from_node.get_distance(to_node)
-    #             # Compute additional edge features based on from_node type
-    #             if isinstance(from_node, BaseStation):
-    #                 from_node._set_transmission_and_jamming_power_density()
-    #                 snr = from_node._compute_snr(to_node)
-    #                 spectral_efficiency = np.log2(1 + snr)
-    #                 edge_feat = np.array(
-    #                     [distance, snr, spectral_efficiency], dtype=np.float32
-    #                 )
-    #             else:  # User
-    #                 edge_feat = np.array([distance, 0.0, 0.0], dtype=np.float32)
-    #             # Append edge index (using node indices) and edge features
-    #             edge_index.append(
-    #                 [node_idx_map[from_node_id], node_idx_map[to_node_id]]
-    #             )
-    #             edge_features.append(edge_feat)
-    #
-    #     # Convert lists to torch tensors
-    #     x = torch.tensor(np.stack(node_features), dtype=torch.float)
-    #     edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
-    #     edge_attr = torch.tensor(np.stack(edge_features), dtype=torch.float)
-    #
-    #     # Create and return the torch_geometric.data.Data object
-    #     data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
-    #     return data if not return_index_map else (data, node_idx_map)
 
     def from_networkx(self, graph: nx.DiGraph):
         """
