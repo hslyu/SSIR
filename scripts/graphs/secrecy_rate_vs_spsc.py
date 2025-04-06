@@ -42,6 +42,11 @@ def generate_hppp_on_bbox(lat_min, lat_max, lon_min, lon_max, density):
 
 def process_experiment(args):
     """Run one experiment 10 times and return average secrecy rate per scheme."""
+
+    def get_eves(density, altitude):
+        lat, lon = generate_hppp_on_bbox(lat_min, lat_max, lon_min, lon_max, density)
+        return np.column_stack([lat, lon, np.full(len(lat), altitude)])
+
     exp_id, threshold_str, threshold, base_dir, num_repeat = args
 
     env_dir = os.path.join(base_dir, "env", f"exp_{exp_id:03d}")
@@ -70,13 +75,6 @@ def process_experiment(args):
     scheme_results = {scheme: [] for scheme in schemes}
 
     for _ in range(num_repeat):
-
-        def get_eves(density, altitude):
-            lat, lon = generate_hppp_on_bbox(
-                lat_min, lat_max, lon_min, lon_max, density
-            )
-            return np.column_stack([lat, lon, np.full(len(lat), altitude)])
-
         eves_maritime = get_eves(
             bs.BaseStationType.MARITIME.config.eavesdropper_density,
             bs.environmental_variables.maritime_basestations_altitude,
@@ -101,6 +99,11 @@ def process_experiment(args):
 
             g = bs.IABRelayGraph()
             g.load_graph(solution_file, pkl=True)
+            if scheme == "bruteforce" and threshold > 1 - 4e-5:
+                h = bs.IABRelayGraph()
+                h.load_graph(os.path.join(exp_dir, "solution_montecarlo.pkl"))
+                if g.compute_network_throughput() < h.compute_network_throughput():
+                    g = h
 
             mm_secrecy_rate = g.compute_network_secrecy_rate(
                 eves_maritime, eves_ground, eves_haps, eves_leo
@@ -118,16 +121,26 @@ def evaluate_max_min_secrecy_rate():
     base_dir = "/fast/hslyu/mmf_result_1"
 
     raw_logspace = np.concatenate(
-        (np.logspace(-5, -4, 7, base=10)[:-1], np.logspace(-4, -1, 10, base=10)[:-3])
+        (np.logspace(-5, -4, 7, base=10)[:-1], np.logspace(-4, -1, 10, base=10))
     )
+    raw_logspace = np.logspace(-1, 0, 4, base=10)[1:]
     thresholds_to_test = 1 - raw_logspace
     start_exp = 0
     num_experiments = 1000
-    num_repeat_per_exp = 10
+    num_repeat_per_exp = 5
 
-    avg_secrecy_results = {}
+    output_file = os.path.join(base_dir, "avg_secrecy_rate_results.json")
+
+    # Load existing results if available
+    if os.path.isfile(output_file):
+        with open(output_file, "r") as f:
+            avg_secrecy_results = json.load(f)
+    else:
+        avg_secrecy_results = {}
 
     for threshold in thresholds_to_test:
+        bs.environmental_variables.SPSC_probability = threshold
+
         threshold_str = f"{threshold:.6f}"
         avg_secrecy_results[threshold_str] = {}
         schemes = [
@@ -146,7 +159,7 @@ def evaluate_max_min_secrecy_rate():
             for exp_id in range(start_exp, start_exp + num_experiments)
         ]
 
-        with Pool(processes=cpu_count()) as pool:
+        with Pool(processes=cpu_count() - 5) as pool:
             for result in tqdm(
                 pool.imap_unordered(process_experiment, task_args),
                 total=num_experiments,
@@ -165,7 +178,6 @@ def evaluate_max_min_secrecy_rate():
             f"[Threshold={threshold_str}] Avg secrecy rates: {avg_secrecy_results[threshold_str]}"
         )
 
-    output_file = os.path.join(base_dir, "avg_secrecy_rate_results.json")
     with open(output_file, "w") as f:
         json.dump(avg_secrecy_results, f, indent=4)
 
