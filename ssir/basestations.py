@@ -769,7 +769,7 @@ class IABRelayGraph:
                     reachable_nodes.append(to_node.get_id())
                 elif (
                     to_node.basestation_type.name == BaseStationType.LEO.name
-                    and from_node.get_distance(to_node) <= 600
+                    and from_node.get_distance(to_node) <= 700
                 ):
                     reachable_nodes.append(to_node.get_id())
                 continue
@@ -794,7 +794,7 @@ class IABRelayGraph:
                 isinstance(to_node, BaseStation)
                 and to_node.basestation_type.name == BaseStationType.HAPS.name
                 and from_node.get_distance(to_node)
-                <= min(maximum_link_distance_los, 300)
+                <= min(maximum_link_distance_los, 500)
             ):
                 reachable_nodes.append(to_node.get_id())
 
