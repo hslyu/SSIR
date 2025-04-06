@@ -456,15 +456,19 @@ class BaseStation(AbstractNode):
         max_distance = self._get_farthest_forward_link_distance()
 
         # Equation for threshold
-        jamming_power_density_mW_over_Hz = (
-            max(
-                (-(kappa * max_distance**2) / np.log(tau)) ** (pathloss_exponent / 2)
-                - 1,
-                0,
+        if tau != 0:
+            jamming_power_density_mW_over_Hz = (
+                max(
+                    (-(kappa * max_distance**2) / np.log(tau))
+                    ** (pathloss_exponent / 2)
+                    - 1,
+                    0,
+                )
+                * noise_power_density
+                * 3.1623  # 5 dBm offset
             )
-            * noise_power_density
-            * 3.1623  # 5 dBm offset
-        )
+        else:
+            jamming_power_density_mW_over_Hz = 0
         jamming_power_density_mW_over_Hz = min(
             jamming_power_density_mW_over_Hz, power_capacity_density
         )
@@ -782,13 +786,15 @@ class IABRelayGraph:
             if (
                 isinstance(to_node, BaseStation)
                 and to_node.basestation_type.name == BaseStationType.LEO.name
-                and from_node.get_distance(to_node) <= maximum_link_distance_los
+                and from_node.get_distance(to_node)
+                <= min(maximum_link_distance_los, 900)
             ):
                 reachable_nodes.append(to_node.get_id())
             elif (
                 isinstance(to_node, BaseStation)
-                and to_node.basestation_type.name == BaseStationType.LEO.name
-                and from_node.get_distance(to_node) <= maximum_link_distance_los
+                and to_node.basestation_type.name == BaseStationType.HAPS.name
+                and from_node.get_distance(to_node)
+                <= min(maximum_link_distance_los, 300)
             ):
                 reachable_nodes.append(to_node.get_id())
 
