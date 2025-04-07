@@ -36,22 +36,12 @@ def load_exp_graph(exp_id, env_dir):
     config_path = os.path.join(exp_dir, "config.json")
     graph_path = os.path.join(exp_dir, "graph.pkl")
 
-    if os.path.isfile(config_path) and os.path.isfile(graph_path):
-        # Load existing config and graph
-        with open(config_path, "r") as f:
-            config = json.load(f)
-        loaded_graph = bs.IABRelayGraph()
-        loaded_graph.load_graph(graph_path, pkl=True)
-        return config, loaded_graph
-    else:
-        # Create new config and graph
-        config = env.generate_config(exp_id)
-        save_config(config, exp_dir, "config.json")
-
-        dm = env.DataManager(**config)
-        new_graph = dm.generate_master_graph()
-        new_graph.save_graph(graph_path, pkl=True)
-        return config, new_graph
+    # Load existing config and graph
+    with open(config_path, "r") as f:
+        config = json.load(f)
+    loaded_graph = bs.IABRelayGraph()
+    loaded_graph.load_graph(graph_path, pkl=True)
+    return config, loaded_graph
 
 
 def run_schemes(graph):
@@ -167,7 +157,7 @@ def main_experiment():
     )
     thresholds_to_test = 1 - raw_logspace
     start = 0
-    num_experiments = 1000
+    num_experiments = 200
 
     base_dir = "./results_mmf_vs_spsc"
     os.makedirs(base_dir, exist_ok=True)
