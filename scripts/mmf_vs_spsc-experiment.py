@@ -111,13 +111,16 @@ def run_one_experiment(threshold, exp_id, base_dir, env_dir):
     # Set SPSC_probability
     bs.environmental_variables.SPSC_probability = threshold
 
-    # Run pathfinding schemes
-    scheme_results = run_schemes(graph)
-
     # Save results under spsc_{threshold}/exp_{exp_id}/
     threshold_dir = os.path.join(base_dir, f"spsc_{threshold:.6f}")
     exp_dir = os.path.join(threshold_dir, f"exp_{exp_id:03d}")
-    os.makedirs(exp_dir, exist_ok=True)
+    if os.path.exists(exp_dir):
+        return threshold, {}, ""
+    else:
+        os.makedirs(exp_dir)
+
+    # Run pathfinding schemes
+    scheme_results = run_schemes(graph)
 
     throughput_dict = {}
     result_str_parts = []
@@ -156,8 +159,8 @@ def main_experiment():
         (np.logspace(-5, -4, 7, base=10)[:-1], np.logspace(-4, 0, 13, base=10))
     )
     thresholds_to_test = 1 - raw_logspace
-    start = 0
-    num_experiments = 200
+    start = 100
+    num_experiments = 100
 
     base_dir = "./results_mmf_vs_spsc"
     os.makedirs(base_dir, exist_ok=True)
@@ -179,7 +182,7 @@ def main_experiment():
     pbar = tqdm(total=total_tasks, desc="Overall Progress", position=0, leave=True)
 
     # Create a multiprocessing Pool with maxtasksperchild=1 to mitigate memory leakage
-    with multiprocessing.Pool(processes=os.cpu_count(), maxtasksperchild=1) as pool:
+    with multiprocessing.Pool(processes=os.cpu_count()) as pool:
         # Use imap_unordered to process tasks as they complete
         for result in pool.imap_unordered(run_task, tasks):
             completed += 1
