@@ -57,37 +57,37 @@ def run_schemes(graph):
     """
     scheme_results = {}
 
-    # A* using distance metric
-    costs, predecessors = astar.a_star(graph, metric="distance")
-    g_distance = astar.get_solution_graph(graph, predecessors)
-    scheme_results["astar_distance"] = (
-        g_distance,
-        g_distance.compute_network_throughput(),
-    )
-
-    # A* using hop count
-    costs, predecessors = astar.a_star(graph, metric="hop")
-    g_hop = astar.get_solution_graph(graph, predecessors)
-    scheme_results["astar_hop"] = (g_hop, g_hop.compute_network_throughput())
-
-    # A* using spectral efficiency
-    costs, predecessors = astar.a_star(graph, metric="spectral_efficiency")
-    g_spectral = astar.get_solution_graph(graph, predecessors)
-    scheme_results["astar_spectral_efficiency"] = (
-        g_spectral,
-        g_spectral.compute_network_throughput(),
-    )
-
-    # Genetic algorithm
-    g_genetic, genetic_throughput = genetic.get_solution_graph(graph)
-    scheme_results["genetic"] = (g_genetic, genetic_throughput)
-
-    # Monte Carlo method
-    g_montecarlo = montecarlo.get_solution_graph(graph, 100, 5, 20, verbose=False)
-    scheme_results["montecarlo"] = (
-        g_montecarlo,
-        g_montecarlo.compute_network_throughput(),
-    )
+    # # A* using distance metric
+    # costs, predecessors = astar.a_star(graph, metric="distance")
+    # g_distance = astar.get_solution_graph(graph, predecessors)
+    # scheme_results["astar_distance"] = (
+    #     g_distance,
+    #     g_distance.compute_network_throughput(),
+    # )
+    #
+    # # A* using hop count
+    # costs, predecessors = astar.a_star(graph, metric="hop")
+    # g_hop = astar.get_solution_graph(graph, predecessors)
+    # scheme_results["astar_hop"] = (g_hop, g_hop.compute_network_throughput())
+    #
+    # # A* using spectral efficiency
+    # costs, predecessors = astar.a_star(graph, metric="spectral_efficiency")
+    # g_spectral = astar.get_solution_graph(graph, predecessors)
+    # scheme_results["astar_spectral_efficiency"] = (
+    #     g_spectral,
+    #     g_spectral.compute_network_throughput(),
+    # )
+    #
+    # # Genetic algorithm
+    # g_genetic, genetic_throughput = genetic.get_solution_graph(graph)
+    # scheme_results["genetic"] = (g_genetic, genetic_throughput)
+    #
+    # # Monte Carlo method
+    # g_montecarlo = montecarlo.get_solution_graph(graph, 100, 5, 20, verbose=False)
+    # scheme_results["montecarlo"] = (
+    #     g_montecarlo,
+    #     g_montecarlo.compute_network_throughput(),
+    # )
 
     # Greedy algorithm
     g_greedy = greedy.get_solution_graph(graph, 50, verbose=False)
@@ -96,12 +96,12 @@ def run_schemes(graph):
         g_greedy.compute_network_throughput(),
     )
 
-    # Brute-force search
-    g_bruteforce = bruteforce.get_solution_graph(graph, 2000, verbose=False)
-    scheme_results["bruteforce"] = (
-        g_bruteforce,
-        g_bruteforce.compute_network_throughput(),
-    )
+    # # Brute-force search
+    # g_bruteforce = bruteforce.get_solution_graph(graph, 2000, verbose=False)
+    # scheme_results["bruteforce"] = (
+    #     g_bruteforce,
+    #     g_bruteforce.compute_network_throughput(),
+    # )
 
     return scheme_results
 
@@ -123,6 +123,9 @@ def run_one_experiment_with_power(power_level, exp_id, base_dir, env_dir):
         # old_cfg = bs_node.basestation_type.config
         # new_cfg = replace(old_cfg, minimum_transit_power_ratio=power_level)
         bs_node.basestation_type.config.minimum_transit_power_ratio = power_level
+
+    graph.reset()
+    graph.connect_reachable_nodes()
 
     # 3) Run optimization schemes
     scheme_results = run_schemes(graph)
