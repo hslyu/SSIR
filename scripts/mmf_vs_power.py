@@ -7,7 +7,6 @@ import numpy as np
 from tqdm import tqdm
 
 # ssir-related imports
-import ssir.environment as env
 from ssir import basestations as bs
 from ssir.pathfinder import (
     astar,
@@ -57,37 +56,51 @@ def run_schemes(graph):
     """
     scheme_results = {}
 
-    # # A* using distance metric
-    # costs, predecessors = astar.a_star(graph, metric="distance")
-    # g_distance = astar.get_solution_graph(graph, predecessors)
-    # scheme_results["astar_distance"] = (
-    #     g_distance,
-    #     g_distance.compute_network_throughput(),
-    # )
-    #
-    # # A* using hop count
-    # costs, predecessors = astar.a_star(graph, metric="hop")
-    # g_hop = astar.get_solution_graph(graph, predecessors)
-    # scheme_results["astar_hop"] = (g_hop, g_hop.compute_network_throughput())
-    #
-    # # A* using spectral efficiency
-    # costs, predecessors = astar.a_star(graph, metric="spectral_efficiency")
-    # g_spectral = astar.get_solution_graph(graph, predecessors)
-    # scheme_results["astar_spectral_efficiency"] = (
-    #     g_spectral,
-    #     g_spectral.compute_network_throughput(),
-    # )
-    #
-    # # Genetic algorithm
-    # g_genetic, genetic_throughput = genetic.get_solution_graph(graph)
-    # scheme_results["genetic"] = (g_genetic, genetic_throughput)
-    #
-    # # Monte Carlo method
-    # g_montecarlo = montecarlo.get_solution_graph(graph, 100, 5, 20, verbose=False)
-    # scheme_results["montecarlo"] = (
-    #     g_montecarlo,
-    #     g_montecarlo.compute_network_throughput(),
-    # )
+    # A* using distance metric
+    costs, predecessors = astar.a_star(graph, metric="distance")
+    g_distance = astar.get_solution_graph(graph, predecessors)
+    scheme_results["astar_distance"] = (
+        g_distance,
+        g_distance.compute_network_throughput(),
+    )
+
+    # Check if the graph is feasible
+    for user in graph.users:
+        path = astar.get_shortest_path(predecessors, user.get_id())
+        if path[0] == -1:
+            graph.reset()
+            scheme_results["astar_distance"] = (graph, 0)
+            scheme_results["astar_hop"] = (graph, 0)
+            scheme_results["astar_spectral_efficiency"] = (graph, 0)
+            scheme_results["genetic"] = (graph, 0)
+            scheme_results["montecarlo"] = (graph, 0)
+            scheme_results["greedy"] = (graph, 0)
+            scheme_results["bruteforce"] = (graph, 0)
+            return scheme_results
+
+    # A* using hop count
+    costs, predecessors = astar.a_star(graph, metric="hop")
+    g_hop = astar.get_solution_graph(graph, predecessors)
+    scheme_results["astar_hop"] = (g_hop, g_hop.compute_network_throughput())
+
+    # A* using spectral efficiency
+    costs, predecessors = astar.a_star(graph, metric="spectral_efficiency")
+    g_spectral = astar.get_solution_graph(graph, predecessors)
+    scheme_results["astar_spectral_efficiency"] = (
+        g_spectral,
+        g_spectral.compute_network_throughput(),
+    )
+
+    # Genetic algorithm
+    g_genetic, genetic_throughput = genetic.get_solution_graph(graph)
+    scheme_results["genetic"] = (g_genetic, genetic_throughput)
+
+    # Monte Carlo method
+    g_montecarlo = montecarlo.get_solution_graph(graph, 100, 5, 20, verbose=False)
+    scheme_results["montecarlo"] = (
+        g_montecarlo,
+        g_montecarlo.compute_network_throughput(),
+    )
 
     # Greedy algorithm
     g_greedy = greedy.get_solution_graph(graph, 50, verbose=False)
@@ -96,12 +109,12 @@ def run_schemes(graph):
         g_greedy.compute_network_throughput(),
     )
 
-    # # Brute-force search
-    # g_bruteforce = bruteforce.get_solution_graph(graph, 2000, verbose=False)
-    # scheme_results["bruteforce"] = (
-    #     g_bruteforce,
-    #     g_bruteforce.compute_network_throughput(),
-    # )
+    # Brute-force search
+    g_bruteforce = bruteforce.get_solution_graph(graph, 2000, verbose=False)
+    scheme_results["bruteforce"] = (
+        g_bruteforce,
+        g_bruteforce.compute_network_throughput(),
+    )
 
     return scheme_results
 
@@ -147,7 +160,7 @@ def run_one_experiment_with_power(power_level, exp_id, base_dir, env_dir):
     with open(os.path.join(out_dir, "result.json"), "w") as f:
         json.dump(throughput_dict, f, indent=4)
 
-    summary_str = f"Power={power_level:.1f}, Exp={exp_id:03d} | " + " ".join(
+    summary_str = f"Power={power_level:.2f}, Exp={exp_id:03d} | " + " ".join(
         result_str_parts
     )
     return power_level, throughput_dict, summary_str
@@ -160,9 +173,10 @@ def run_task(args):
 
 def main_experiment():
     # Define power levels to test (0.0 to 0.9 with step size 0.1)
-    power_levels_to_test = np.arange(0.0, 1.0, 0.1)
+    power_levels_to_test = np.arange(0.95, 0.49, -0.05)
+    print(power_levels_to_test)
     start = 0
-    num_experiments = 50
+    num_experiments = 10
 
     base_dir = "./results_mmf_vs_power"
     os.makedirs(base_dir, exist_ok=True)
@@ -201,7 +215,7 @@ def main_experiment():
                 avg_summary = {k: v / num_experiments for k, v in aggregate.items()}
                 avg_str_parts = [f"{k}={v:.2f}" for k, v in avg_summary.items()]
                 tqdm.write(
-                    f"[Summary] Power={power_level:.1f} | " + " ".join(avg_str_parts)
+                    f"[Summary] Power={power_level:.2f} | " + " ".join(avg_str_parts)
                 )
     pbar.close()
     print("All experiments finished.")
