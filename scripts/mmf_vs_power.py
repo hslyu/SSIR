@@ -196,7 +196,7 @@ def main_experiment():
     pbar = tqdm(total=total_tasks, desc="Overall Progress", position=0, leave=True)
 
     # Run experiments in parallel using multiprocessing
-    with multiprocessing.Pool(processes=os.cpu_count()) as pool:
+    with multiprocessing.Pool(processes=os.cpu_count(), maxtasksperchild=1) as pool:
         for result in pool.imap_unordered(run_task, tasks):
             completed += 1
             pbar.update(1)
