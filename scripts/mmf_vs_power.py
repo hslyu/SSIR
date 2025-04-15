@@ -174,7 +174,6 @@ def run_task(args):
 def main_experiment():
     # Define power levels to test (0.0 to 0.9 with step size 0.1)
     power_levels_to_test = np.arange(0.95, 0.49, -0.05)
-    print(power_levels_to_test)
     start = 0
     num_experiments = 10
 
