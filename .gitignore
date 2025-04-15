@@ -41,3 +41,5 @@ build/
 # Ignore directories containing "results"
 **/results*/
 **/__pycache__*/
+*.eps
+*tmp*
