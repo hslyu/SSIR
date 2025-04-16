@@ -7,7 +7,6 @@ import numpy as np
 from tqdm import tqdm
 
 # ssir-related imports
-import ssir.environment as env
 from ssir import basestations as bs
 from ssir.pathfinder import (
     astar,
@@ -60,42 +59,42 @@ def run_schemes(graph):
     )
 
     # A* hop
-    costs, predecessors = astar.a_star(graph, metric="hop")
-    g_hop = astar.get_solution_graph(graph, predecessors)
-    scheme_results["astar_hop"] = (g_hop, g_hop.compute_network_throughput())
-
-    # A* spectral_efficiency
-    costs, predecessors = astar.a_star(graph, metric="spectral_efficiency")
-    g_spectral = astar.get_solution_graph(graph, predecessors)
-    scheme_results["astar_spectral_efficiency"] = (
-        g_spectral,
-        g_spectral.compute_network_throughput(),
-    )
-
-    # Genetic
-    g_genetic, genetic_throughput = genetic.get_solution_graph(graph)
-    scheme_results["genetic"] = (g_genetic, genetic_throughput)
-
-    # Montecarlo
-    g_montecarlo = montecarlo.get_solution_graph(graph, 100, 5, 20, verbose=False)
-    scheme_results["montecarlo"] = (
-        g_montecarlo,
-        g_montecarlo.compute_network_throughput(),
-    )
-
-    # Greedy
-    g_greedy = greedy.get_solution_graph(graph, 50, verbose=False)
-    scheme_results["greedy"] = (
-        g_greedy,
-        g_greedy.compute_network_throughput(),
-    )
-
-    # Bruteforce
-    g_bruteforce = bruteforce.get_solution_graph(graph, 2000, verbose=False)
-    scheme_results["bruteforce"] = (
-        g_bruteforce,
-        g_bruteforce.compute_network_throughput(),
-    )
+    # costs, predecessors = astar.a_star(graph, metric="hop")
+    # g_hop = astar.get_solution_graph(graph, predecessors)
+    # scheme_results["astar_hop"] = (g_hop, g_hop.compute_network_throughput())
+    #
+    # # A* spectral_efficiency
+    # costs, predecessors = astar.a_star(graph, metric="spectral_efficiency")
+    # g_spectral = astar.get_solution_graph(graph, predecessors)
+    # scheme_results["astar_spectral_efficiency"] = (
+    #     g_spectral,
+    #     g_spectral.compute_network_throughput(),
+    # )
+    #
+    # # Genetic
+    # g_genetic, genetic_throughput = genetic.get_solution_graph(graph)
+    # scheme_results["genetic"] = (g_genetic, genetic_throughput)
+    #
+    # # Montecarlo
+    # g_montecarlo = montecarlo.get_solution_graph(graph, 100, 5, 20, verbose=False)
+    # scheme_results["montecarlo"] = (
+    #     g_montecarlo,
+    #     g_montecarlo.compute_network_throughput(),
+    # )
+    #
+    # # Greedy
+    # g_greedy = greedy.get_solution_graph(graph, 50, verbose=False)
+    # scheme_results["greedy"] = (
+    #     g_greedy,
+    #     g_greedy.compute_network_throughput(),
+    # )
+    #
+    # # Bruteforce
+    # g_bruteforce = bruteforce.get_solution_graph(graph, 2000, verbose=False)
+    # scheme_results["bruteforce"] = (
+    #     g_bruteforce,
+    #     g_bruteforce.compute_network_throughput(),
+    # )
 
     return scheme_results
 
