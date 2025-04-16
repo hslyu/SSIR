@@ -144,7 +144,7 @@ def run_one_experiment_with_power(power_level, exp_id, base_dir, env_dir):
     scheme_results = run_schemes(graph)
 
     # 4) Save results to disk
-    out_dir = os.path.join(base_dir, f"power_{power_level:.1f}", f"exp_{exp_id:03d}")
+    out_dir = os.path.join(base_dir, f"power_{power_level:.2f}", f"exp_{exp_id:03d}")
     os.makedirs(out_dir, exist_ok=True)
     throughput_dict = {}
     result_str_parts = []
@@ -173,7 +173,7 @@ def run_task(args):
 
 def main_experiment():
     # Define power levels to test (0.0 to 0.9 with step size 0.1)
-    power_levels_to_test = np.arange(0.95, 0.49, -0.05)
+    power_levels_to_test = np.arange(0.95, 0.49, -0.1)
     start = 0
     num_experiments = 50
 
