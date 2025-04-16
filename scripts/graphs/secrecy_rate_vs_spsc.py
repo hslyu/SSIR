@@ -69,6 +69,7 @@ def process_experiment(args):
         "montecarlo",
         "greedy",
         "bruteforce",
+        "bruteforce_mmf",
     ]
 
     # Initialize scheme -> list of results
@@ -99,11 +100,13 @@ def process_experiment(args):
 
             g = bs.IABRelayGraph()
             g.load_graph(solution_file, pkl=True)
-            if scheme == "bruteforce" and threshold > 1 - 4e-5:
-                h = bs.IABRelayGraph()
-                h.load_graph(os.path.join(exp_dir, "solution_montecarlo.pkl"))
-                if g.compute_network_throughput() < h.compute_network_throughput():
-                    g = h
+            if scheme == "bruteforce":
+                if threshold > 1 - 4e-5:
+                    h = bs.IABRelayGraph()
+                    h.load_graph(os.path.join(exp_dir, "solution_montecarlo.pkl"))
+                    if g.compute_network_throughput() < h.compute_network_throughput():
+                        g = h
+                scheme_results["bruteforce_mmf"].append(g.compute_network_throughput())
 
             mm_secrecy_rate = g.compute_network_secrecy_rate(
                 eves_maritime, eves_ground, eves_haps, eves_leo
@@ -118,16 +121,16 @@ def process_experiment(args):
 
 
 def evaluate_max_min_secrecy_rate():
-    base_dir = "/fast/hslyu/mmf_result_1"
+    base_dir = "/fast/hslyu/mmf_result_1_3k"
 
     raw_logspace = np.concatenate(
-        (np.logspace(-5, -4, 7, base=10)[:-1], np.logspace(-4, -1, 10, base=10))
+        (np.logspace(-5, -4, 7, base=10)[:-1], np.logspace(-4, 0, 13, base=10))
     )
     raw_logspace = np.logspace(-1, 0, 4, base=10)[1:]
     thresholds_to_test = 1 - raw_logspace
     start_exp = 0
-    num_experiments = 1000
-    num_repeat_per_exp = 5
+    num_experiments = 3000
+    num_repeat_per_exp = 10
 
     output_file = os.path.join(base_dir, "avg_secrecy_rate_results.json")
 
@@ -151,6 +154,7 @@ def evaluate_max_min_secrecy_rate():
             "montecarlo",
             "greedy",
             "bruteforce",
+            "bruteforce_mmf",
         ]
         scheme_accumulator = {scheme: [] for scheme in schemes}
 
@@ -159,7 +163,7 @@ def evaluate_max_min_secrecy_rate():
             for exp_id in range(start_exp, start_exp + num_experiments)
         ]
 
-        with Pool(processes=cpu_count() - 5) as pool:
+        with Pool(processes=cpu_count()) as pool:
             for result in tqdm(
                 pool.imap_unordered(process_experiment, task_args),
                 total=num_experiments,
