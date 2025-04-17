@@ -176,8 +176,8 @@ def main() -> None:
     # Create task list ------------------------------------------------------
     tasks = [
         (dens, exp, base_dir, env_dir, target_bs_type)
-        for dens in eaves_densities
         for exp in range(start, start + num_experiments)
+        for dens in eaves_densities
     ]
     total_tasks = len(tasks)
 
