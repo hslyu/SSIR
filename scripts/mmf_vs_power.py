@@ -119,7 +119,7 @@ def run_schemes(graph):
     return scheme_results
 
 
-def run_one_experiment_with_power(power_level, exp_id, base_dir, env_dir):
+def run_single_experiment(power_level, exp_id, base_dir, env_dir):
     """
     Run one experiment for a given power level and exp_id.
 
@@ -168,13 +168,13 @@ def run_one_experiment_with_power(power_level, exp_id, base_dir, env_dir):
 
 def run_task(args):
     # Unpack arguments and run a single experiment
-    return run_one_experiment_with_power(*args)
+    return run_single_experiment(*args)
 
 
-def main_experiment():
+def main():
     # Define power levels to test (0.0 to 0.9 with step size 0.1)
-    power_levels_to_test = np.arange(0.95, 0.49, -0.1)
-    start = 0
+    power_levels_to_test = np.arange(0.95, 0.34, -0.05)
+    start = 1000
     num_experiments = 50
 
     base_dir = "./results_mmf_vs_power"
@@ -196,7 +196,7 @@ def main_experiment():
     pbar = tqdm(total=total_tasks, desc="Overall Progress", position=0, leave=True)
 
     # Run experiments in parallel using multiprocessing
-    with multiprocessing.Pool(processes=os.cpu_count(), maxtasksperchild=1) as pool:
+    with multiprocessing.Pool(processes=os.cpu_count() - 1, maxtasksperchild=1) as pool:
         for result in pool.imap_unordered(run_task, tasks):
             completed += 1
             pbar.update(1)
@@ -221,4 +221,4 @@ def main_experiment():
 
 
 if __name__ == "__main__":
-    main_experiment()
+    main()
