@@ -167,7 +167,7 @@ def main() -> None:
     eaves_densities: np.ndarray = np.logspace(-5, -1, 13, base=10)
 
     start: int = 0  # starting index
-    num_experiments: int = 1
+    num_experiments: int = 200
 
     base_dir = Path("./results_mmf_vs_density").resolve()
     env_dir = base_dir / "env"
