@@ -136,7 +136,14 @@ def run_single_experiment(
     out_dir = base_dir / f"density_{density:.2e}" / f"exp_{exp_id:03d}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # 5. Load existing results if any
+    result_path = out_dir / "result.json"
+
     throughputs: Dict[str, float] = {}
+    if result_path.exists():
+        with open(result_path, "r") as fp:
+            throughputs = json.load(fp)
+
     msg_parts: List[str] = []
     for name, (sol_graph, tp) in scheme_results.items():
         sol_graph.save_graph(out_dir / f"solution_{name}.pkl", pkl=True)
@@ -163,11 +170,11 @@ def run_task(args):
 
 
 def main() -> None:
-    target_bs_type = [bs.BaseStationType.GROUND.name]
+    target_bs_type = [bs.BaseStationType.MARITIME.name]
     eaves_densities: np.ndarray = np.logspace(-5, -1, 13, base=10)
 
-    start: int = 0  # starting index
-    num_experiments: int = 200
+    start: int = 0
+    num_experiments: int = 1000
 
     base_dir = Path("./results_mmf_vs_density").resolve()
     env_dir = base_dir / "env"
@@ -187,7 +194,7 @@ def main() -> None:
     density_to_results: defaultdict = defaultdict(list)
     completed: int = 0
 
-    with mp.Pool(processes=os.cpu_count() - 1, maxtasksperchild=1) as pool:
+    with mp.Pool(processes=os.cpu_count() - 4, maxtasksperchild=1) as pool:
         for dens, tp_dict, summary in pool.imap_unordered(run_task, tasks):
             completed += 1
             progress_bar.update(1)
