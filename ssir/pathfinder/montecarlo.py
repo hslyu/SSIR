@@ -1,8 +1,9 @@
+import random
 import time
 
 from ssir import basestations as bs
 from ssir.pathfinder import utils
-from ssir.pathfinder.astar import a_star
+from ssir.pathfinder.astar import a_star, get_shortest_path
 
 
 def get_solution_graph(
@@ -18,6 +19,17 @@ def get_solution_graph(
     """
     graph_list = []
     throughput_list = []
+
+    _, pred = a_star(graph, metric="hop")
+    # Sort the user IDs by distance from the source
+    uid_list = [user.get_id() for user in graph.users]
+    hop_list = [len(get_shortest_path(pred, user.get_id())) for user in graph.users]
+    sorted_id_list = sorted(
+        uid_list,
+        key=lambda x: hop_list[uid_list.index(x)],
+        reverse=True,
+    )
+
     for _ in range(num_trials):
         # Generate multiple predecessor lists for different metrics
         metrics = ["hop", "distance"] + ["random"] * num_predecessors
@@ -35,20 +47,19 @@ def get_solution_graph(
         updated = True
         update_round = 0
         source = graph.nodes[0]
-        # Sort the user IDs by distance from the source
-        user_id_list = [user.get_id() for user in graph.users]
-        distance_list = [source.get_distance(user) for user in graph.users]
-        sorted_id_list = sorted(
-            user_id_list,
-            key=lambda x: distance_list[user_id_list.index(x)],
-            reverse=False,
-        )
+
         old_throughput = -1
         while updated and update_round < num_rounds:
             updated = False
 
             s = time.time()
-            for user_id in sorted_id_list:
+            if update_round == 0:
+                user_id_list = sorted_id_list
+            else:
+                random.shuffle(uid_list)
+                user_id_list = uid_list
+
+            for user_id in user_id_list:
                 # Temporarily remove the user's path
                 deleted_edges = utils.delete_user(result_graph, user_id)
 

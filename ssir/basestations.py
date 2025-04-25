@@ -183,8 +183,8 @@ class AbstractNode(ABC):
             otherwise in local metric units.
         """
         if self._isGeographic:
-            lat1, lon1, alt1 = self.get_position()
-            lat2, lon2, alt2 = node.get_position()
+            lon1, lat1, alt1 = self.get_position()
+            lon2, lat2, alt2 = node.get_position()
 
             # Convert latitude and longitude from degrees to radians
             lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
@@ -267,6 +267,14 @@ class BaseStation(AbstractNode):
         self.transmission_power_density: float = 0.0
         self.jamming_power_density: float = 0.0
         self.throughput: float = 0.0
+
+    @property
+    def config(self) -> BaseStationConfig:
+        return getattr(self, "_config", self.basestation_type.config)
+
+    @config.setter
+    def config(self, value: BaseStationConfig):
+        self._config = value
 
     def __repr__(self):
         # return f"BaseStation(node_id={self._node_id}, position={self._position}, type={self.basestation_type})"
@@ -498,7 +506,7 @@ class BaseStation(AbstractNode):
         Implementation of the Equation (??) in the paper.
         """
         # Physical constants and configuration parameters
-        config = self.basestation_type.config
+        config = self.config
         pathloss_exponent = config.pathloss_exponent
         power_capacity_density = (
             dB_to_linear(config.power_capacity) / config.bandwidth / 1e6
@@ -699,9 +707,9 @@ class IABRelayGraph:
             if current_node.has_parent():
                 user.hops += 1
                 parent_nodes: list[AbstractNode] = current_node.get_parent()
-                assert len(parent_nodes) == 1, (
-                    f"There are more than one parent node. Current node: {current_node} Parent node: {parent_nodes}"
-                )
+                assert (
+                    len(parent_nodes) == 1
+                ), f"There are more than one parent node. Current node: {current_node} Parent node: {parent_nodes}"
                 current_node = parent_nodes[0]
                 current_node.connected_user.append(user)
             else:
@@ -741,9 +749,9 @@ class IABRelayGraph:
             raise ValueError(f"Node {node_id} does not exist in the graph.")
 
         from_node = self.nodes[node_id]
-        assert isinstance(from_node, BaseStation), (
-            f"Node {node_id} is not a base station."
-        )
+        assert isinstance(
+            from_node, BaseStation
+        ), f"Node {node_id} is not a base station."
 
         maximum_link_distance = from_node.compute_maximum_link_distance()
         maximum_link_distance_los = from_node.compute_maximum_link_distance(is_los=True)

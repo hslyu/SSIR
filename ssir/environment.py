@@ -1,14 +1,24 @@
+import csv
+import datetime as dt
 import os
 import random
 from dataclasses import dataclass
-from typing import List, Optional, Union
+from datetime import timedelta
+from typing import List, Optional, Tuple, Union, Dict
 
 import geopandas as gpd
+import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from shapely.geometry import Point, box
 from shapely.ops import nearest_points, unary_union
 from shapely.prepared import prep
+
+from svgpathtools import svg2paths
+from svgpath2mpl import parse_path
+from matplotlib.transforms import Affine2D
+from matplotlib.path import Path 
 
 from ssir import basestations as bs
 from ssir import pathfinder as pf
@@ -68,12 +78,21 @@ class DataManager:
         self,
         longitude_range: List[float],
         latitude_range: List[float],
+        # Optional coordinate lists (lat, lon[, alt])
+        source_coords: Optional[List[Tuple[float, float, float]]] = None,
+        ground_coords: Optional[List[Tuple[float, float, float]]] = None,
+        maritime_coords: Optional[List[Tuple[float, float, float]]] = None,
+        haps_coords: Optional[List[Tuple[float, float, float]]] = None,
+        leo_coords: Optional[List[Tuple[float, float, float]]] = None,
+        user_coords: Optional[List[Tuple[float, float, float]]] = None,
+        # File paths and CRS
         land_shp_path: str = "map/ne_10m_land/ne_10m_land.shp",
         lakes_shp_path: str = "map/ne_10m_lakes/ne_10m_lakes.shp",
         rivers_shp_path: str = "map/ne_10m_rivers_lake_centerlines/ne_10m_rivers_lake_centerlines.shp",
         maritime_shp_path: str = "map/ne_10m_ocean/ne_10m_ocean.shp",
         coastline_shp_path: str = "map/ne_10m_coastline/ne_10m_coastline.shp",
         target_crs: str = "EPSG:4326",
+        # Numbers of random instances (ignored if coords list given)
         num_maritime_basestations: int = 20,
         num_ground_basestations: int = 25,
         num_haps_basestations: int = 20,
@@ -131,46 +150,119 @@ class DataManager:
         ####################
         # Generate the user and basestation data
         ####################
-        # Filter the data to the bounding box
-        source_basestation_point = self.generate_source_point(self.gdf_list[0], 2)
-        maritime_basestations_points = self.generate_random_points_within_gdf(
-            self.gdf_list[3], num_maritime_basestations
+
+        # ── Helper: build point/alt lists ──────────────────────────────────
+        def _prepare(
+            coords: Optional[List[Tuple[float, float, float]]],
+            default_alt: float,
+            generator,
+            *args,
+        ):
+            """
+            Return (points, altitude_list).
+            If coords is None → use generator to make points and uniform alt list.
+            If coords is provided → convert to Point objects and extract per‑node alt.
+            """
+            if coords is not None:
+                pts, alts = [], []
+                for tup in coords:
+                    if len(tup) == 3:
+                        lat, lon, alt = tup
+                    elif len(tup) == 2:
+                        lat, lon = tup
+                        alt = default_alt
+                    else:
+                        raise ValueError("Each coordinate must be (lat, lon[, alt]).")
+                    pt = Point(lon, lat)
+                    if self.bbox.contains(pt):
+                        pts.append(pt)
+                        alts.append(alt)
+                return pts, alts
+            # Random generation path
+            pts = generator(*args)
+            alts = [default_alt] * len(pts)
+            return pts, alts
+
+        env = bs.environmental_variables
+        # Prepare every category
+        source_pts, source_alts = _prepare(
+            source_coords,
+            env.ground_basestations_altitude,
+            self.generate_source_point,
+            self.gdf_list[0],
+            2,
         )
-        lakes_basestations_points = self.generate_random_points_within_gdf(
-            self.gdf_list[1], int(num_maritime_basestations * 0.2)
+        maritime_pts, maritime_alts = _prepare(
+            maritime_coords,
+            env.maritime_basestations_altitude,
+            self.generate_random_points_within_gdf,
+            self.gdf_list[3],
+            num_maritime_basestations,
         )
-        # merge maritime and lakes basestations and sample with num_maritime_basestations
-        maritime_basestations_points = (
-            maritime_basestations_points + lakes_basestations_points
-        )
-        maritime_basestations_points = random.sample(
-            maritime_basestations_points, num_maritime_basestations
-        )
-        ground_basestations_points = self.generate_random_points_within_gdf(
+        # 20% of maritime BSs can be on lakes (only when random)
+        if maritime_coords is None:
+            lakes_pts = self.generate_random_points_within_gdf(
+                self.gdf_list[1],
+                int(num_maritime_basestations * 0.2),
+            )
+            maritime_pts += lakes_pts
+            maritime_alts += [env.maritime_basestations_altitude] * len(lakes_pts)
+            maritime_samples = random.sample(
+                list(zip(maritime_pts, maritime_alts)),
+                min(num_maritime_basestations, len(maritime_pts)),
+            )
+            maritime_pts, maritime_alts = map(list, zip(*maritime_samples))
+
+        ground_pts, ground_alts = _prepare(
+            ground_coords,
+            env.ground_basestations_altitude,
+            self.generate_random_points_within_gdf,
             self.gdf_list[0],
             num_ground_basestations,
         )
-        haps_basestations_points = self.generate_random_points_within_gdf(
-            self.bbox_gdf, num_haps_basestations
-        )
-        leo_basestations_points = self.generate_random_points_within_gdf(
-            self.bbox_gdf, num_leo_basestations
-        )
-        users_points = self.generate_random_points_within_gdf(
-            self.bbox_gdf, num_users, 50
-        )
-        node_point_list = [
-            source_basestation_point,
-            maritime_basestations_points,
-            ground_basestations_points,
-            haps_basestations_points,
-            leo_basestations_points,
-            users_points,
-        ]
 
+        haps_pts, haps_alts = _prepare(
+            haps_coords,
+            env.haps_basestations_altitude,
+            self.generate_random_points_within_gdf,
+            self.bbox_gdf,
+            num_haps_basestations,
+        )
+        leo_pts, leo_alts = _prepare(
+            leo_coords,
+            env.leo_basestations_altitude,
+            self.generate_random_points_within_gdf,
+            self.bbox_gdf,
+            num_leo_basestations,
+        )
+        users_pts, users_alts = _prepare(
+            user_coords,
+            0.0,
+            self.generate_random_points_within_gdf,
+            self.bbox_gdf,
+            num_users,
+            50,
+        )
+
+        # Store for later use
+        self.node_points = [
+            source_pts,
+            maritime_pts,
+            ground_pts,
+            haps_pts,
+            leo_pts,
+            users_pts,
+        ]
+        self.node_alts = [
+            source_alts,
+            maritime_alts,
+            ground_alts,
+            haps_alts,
+            leo_alts,
+            users_alts,
+        ]
         self.node_gdf_list = [
-            gpd.GeoDataFrame(geometry=node_points, crs=target_crs)
-            for node_points in node_point_list
+            gpd.GeoDataFrame(geometry=pts, crs=target_crs) for pts in self.node_points
         ]
 
     def generate_random_points_within_gdf(
@@ -261,40 +353,35 @@ class DataManager:
     def generate_master_graph(self) -> bs.IABRelayGraph:
         graph = bs.IABRelayGraph(bs.environmental_variables)
 
-        basestations_gdf_list = self.node_gdf_list[:-1]
-        user_gdf_list = self.node_gdf_list[-1]
-        basestations_type_list = [
+        bstype_order = [
             bs.BaseStationType.GROUND,  # Source
             bs.BaseStationType.MARITIME,
             bs.BaseStationType.GROUND,
             bs.BaseStationType.HAPS,
             bs.BaseStationType.LEO,
         ]
-        basestations_altitude_list = [
-            bs.environmental_variables.ground_basestations_altitude,
-            bs.environmental_variables.maritime_basestations_altitude,
-            bs.environmental_variables.ground_basestations_altitude,
-            bs.environmental_variables.haps_basestations_altitude,
-            bs.environmental_variables.leo_basestations_altitude,
-        ]
 
-        # Add basestations nodes
+        # Add basestation nodes
         node_id = 0
-        for i, basestations_gdf in enumerate(basestations_gdf_list):
-            for point in basestations_gdf["geometry"]:
-                node = bs.BaseStation(
-                    node_id,
-                    np.array([point.x, point.y, basestations_altitude_list[i]]),
-                    basestations_type_list[i],
-                    isGeographic=True,
+        for idx in range(5):  # first five lists are basestations
+            pts, alts = self.node_points[idx], self.node_alts[idx]
+            bstype = bstype_order[idx]
+            for p, alt in zip(pts, alts):
+                graph.add_node(
+                    bs.BaseStation(
+                        node_id,
+                        np.array([p.x, p.y, alt]),
+                        bstype,
+                        isGeographic=True,
+                    )
                 )
-                graph.add_node(node)
                 node_id += 1
 
-        # Add users nodes
-        for i, point in enumerate(user_gdf_list["geometry"]):
-            node = bs.User(node_id, np.array([point.x, point.y, 0]), isGeographic=True)
-            graph.add_node(node)
+        # Add user nodes
+        for p, alt in zip(self.node_points[-1], self.node_alts[-1]):
+            graph.add_node(
+                bs.User(node_id, np.array([p.x, p.y, alt]), isGeographic=True)
+            )
             node_id += 1
 
         # Connect the nodes
@@ -372,30 +459,96 @@ class DataManager:
         )
 
         return graph
+    
+# --------------------------------------------------------------------------- #
+def _center_bbox(p: Path) -> Path:
+    """Translate path so that its bounding-box centre becomes the origin."""
+    verts = p.vertices.copy()
+    centre = (verts.min(axis=0) + verts.max(axis=0)) / 2.0
+    verts -= centre
+    return Path(verts, p.codes)
 
+
+def load_svg_path(fp: str,
+                  *,
+                  rotate_deg: float = 0.0,
+                  normalise: bool = True,
+                  y_offset: float = 0.0) -> Path:
+    """
+    Load the *first* <path> element from an SVG, centre it, optionally rotate
+    and scale so that the maximum absolute extent equals 1.  Suitable for use
+    as a matplotlib marker.
+    """
+    _, attrs = svg2paths(fp)
+    p = parse_path(attrs[0]["d"])
+    p = _center_bbox(p)
+
+    if normalise:
+        p.vertices /= np.abs(p.vertices).max()
+
+    if rotate_deg:
+        p = p.transformed(Affine2D().rotate_deg(rotate_deg))
+
+    p = p.transformed(Affine2D().scale(-1, 1))
+    return p
+
+
+def build_markers(icon_dir: str) -> Dict[str, Tuple[Path, Path]]:
+    """
+    Pre-load all markers used in PlotManager.
+    Returns:
+        {
+          "ground":   (circle_marker, ground_silhouette),
+          "maritime": (circle_marker, maritime_silhouette),
+          ...
+          "source":   (source_marker, None)          # no outer overlay
+        }
+    """
+    circle = load_svg_path(f"{icon_dir}/circle.svg")  # outer ring (black)
+    source = load_svg_path(f"{icon_dir}/source.svg", rotate_deg=180)  # source BS (star)
+
+    silhouette_map = {
+        "ground":   load_svg_path(f"{icon_dir}/ground.svg", rotate_deg=180),
+        "maritime": load_svg_path(f"{icon_dir}/maritime.svg", rotate_deg=180),
+        "haps":     load_svg_path(f"{icon_dir}/haps.svg", rotate_deg=180),
+        "leo":      load_svg_path(f"{icon_dir}/leo.svg", rotate_deg=180),
+        "users":    load_svg_path(f"{icon_dir}/user.svg", rotate_deg=180),
+    }
+
+    markers = {k: (circle, v) for k, v in silhouette_map.items()}
+    markers["source"] = (None, source)   # composite not needed
+    return markers
 
 @dataclass
 class PlotManager:
     # Set plotting parameters
     fontsize = 16
-    markersize = 5
+    markersize = 8
     linewidth = 1
     gdf_color_list = [
         np.array([230, 255, 230]) / 255.0,  # land
-        np.array([122, 213, 255]) / 255.0,  # lakes
-        np.array([122, 213, 255]) / 255.0,  # rivers
-        np.array([122, 213, 255]) / 255.0,  # maritime
+        "#C5F0FF", # lakes
+        "#C5F0FF", # rivers
+        "#C5F0FF", # maritime
         np.array([0, 0, 0]) / 255.0,  # coastline
     ]
     node_color_list = [
         "deeppink",  # source basestation
-        "blue",  # maritime basestation
-        "teal",  # ground basestation
-        "dodgerblue",  # haps basestation
-        "navy",  # leo basestation
-        "red",  # users
+        "#1360D5",  # maritime basestation
+        "#004d4d",  # ground basestation
+        "#0930AA",  # haps basestation
+        "#000080",  # leo basestation
+        "#1C90FF",  # users
     ]
-    node_marker_list = ["*", "o", "^", "x", "s", "d"]
+    # node_color_list = [
+    #     "#7D0A0A",
+    #     "#050C9C",
+    #     "#EA7300",
+    #     "#3572EF",
+    #     "#3ABEF9",
+    #     "#BF3131",
+    # ]
+    node_marker_list = ["*", "o", "^", "P", "s", "d"]
     node_label_list = [
         "Source Basestation",
         "Maritime Basestation",
@@ -405,107 +558,365 @@ class PlotManager:
         "Users",
     ]
 
+    # ----------------------------------------------------------------------- #
+    # runtime-initialised attributes                                          #
+    # ----------------------------------------------------------------------- #
+    icon_dir: str = "icons"         # where the SVGs live
+    _markers: Dict[str, Tuple[Path, Optional[Path]]] = None  # set in __post_init__
+
+    def __post_init__(self):
+        """Pre-load all SVG markers once."""
+        self._markers = build_markers(self.icon_dir)
+
+    # ----------------------------------------------------------------------- #
+    #   Internal helper – draw a single node                                  #
+    # ----------------------------------------------------------------------- #
+    def _draw_node(self, ax, x, y, node_type: str,
+                   face_color: str, ms: float, z: int, label: Optional[str]):
+        """
+        Draw either:
+          • composite marker = outer black circle + white silhouette
+          • single marker (for 'source')
+        """
+        outer, inner = self._markers[node_type]
+
+        ax.plot(x, y, marker=inner, ls="None", markeredgewidth=0, markeredgecolor="none",
+                color=face_color, markersize=ms, zorder=z, label=label)
+        return
+
+
     def plot(
         self,
         dm: DataManager,
-        graph_list: Optional[Union[bs.IABRelayGraph, List[bs.IABRelayGraph]]] = None,
+        graph: Optional[bs.IABRelayGraph] = None,
         verbose: bool = False,
-        verbose_id: int | List[int] | None = None,
+        verbose_id: Optional[Union[int, List[int]]] = None,
         legend: bool = True,
+        save_path: str = "",
+        plot: bool = True,
+        draw_bbox: List[float] = None,
     ):
-        # Set the plotting parameters
-        fig, ax = plt.subplots(figsize=(8, 8))
+        """
+        Plot geographic map and, if provided, a single IABRelayGraph:
+        - background layers
+        - nodes (highlighted if in graph)
+        - dashed edges weighted by bandwidth share
+        - longest-hop path in crimson
+        - stats box (kbps) at top-right, left-aligned
+        - non-source nodes: Tx/Jam pies
+        - source node: Tx/Jam mini bars
+        - circle the BS with minimum throughput
+        """
 
-        # Set the plot limits to the bounding box
-        ax.set_xlim(*dm.longitude_range)
-        ax.set_ylim(*dm.latitude_range)
-        # Add title and legend
+        # 1) Setup figure & axes
+        fig, ax = plt.subplots(figsize=(8, 8))
+        lon_min, lon_max = dm.longitude_range; lat_min, lat_max = dm.latitude_range
+        ax.set_xlim(lon_min, lon_max)
+        ax.set_ylim(lat_min, lat_max)
         ax.set_xlabel("Longitude", fontsize=self.fontsize)
         ax.set_ylabel("Latitude", fontsize=self.fontsize)
-        ax.set_xticks(np.arange(dm.longitude_range[0], dm.longitude_range[1] + 1, 10))
-        ax.set_yticks(np.arange(dm.latitude_range[0], dm.latitude_range[1] + 1, 5))
+        ax.set_xticks(np.arange(lon_min, lon_max + 1, 8))
+        ax.set_yticks(np.arange(lat_min, lat_max + 1, 5))
 
-        # Check if the graph_list is a single graph or a list of graphs
-        if isinstance(graph_list, bs.IABRelayGraph):
-            graph_list = [graph_list]
+        # 2) Plot background
+        for gdf, col in zip(dm.gdf_list, self.gdf_color_list):
+            if not gdf.empty: gdf.plot(ax=ax, color=col, linewidth=0, zorder=1)
 
-        if isinstance(verbose_id, int):
-            verbose_id = [verbose_id]
+        # 3) Highlight logic
+        highlighted, longest_hop_edges = set(), set()
+        min_bs_node = None
+        if graph:
+            graph.compute_hops()
+            highlighted |= {bsn.get_id() for bsn in graph.basestations if bsn.has_parent() or bsn.has_children()}
+            highlighted |= {u.get_id() for u in graph.users}
+            if graph.users:
+                u_max = max(graph.users, key=lambda u: u.hops)
+                cur = u_max
+                while cur.has_parent():
+                    p = cur.get_parent()[0]; longest_hop_edges.add((p.get_id(), cur.get_id())); cur = p
+            if len(graph.basestations) > 1:
+                min_bs_node = min(graph.basestations[1:], key=lambda b: b.compute_throughput())
 
-        # Select the nodes with parents or children
-        # Users are added regardless of the connection to check the runtime error
-        selected_node_ids = set()
-        if graph_list is not None:
-            for graph in graph_list:
-                for node in graph.basestations:
-                    if node.has_parent() or node.has_children():
-                        selected_node_ids.add(node.get_id())
-            for node in graph_list[0].users:
-                selected_node_ids.add(node.get_id())
-
-        # Plot the geographical data
-        for gdf, color in zip(dm.gdf_list, self.gdf_color_list):
-            if gdf.empty:
-                continue
-            gdf.plot(ax=ax, color=color, linewidth=0, zorder=1)
-
-        node_id = 0
-        for i, node_gdf in enumerate(dm.node_gdf_list):
-            for idx, row in node_gdf.iterrows():
-                if graph_list is None:
-                    color = self.node_color_list[i]
-                    markersize = (
-                        self.markersize if node_id != 0 else self.markersize * 3
-                    )
+        # 4) Plot nodes
+        vid_list = ([verbose_id] if isinstance(verbose_id, int) else verbose_id) or []
+        node_types = ["source", "maritime", "ground", "haps", "leo", "users"]
+        nid = 0
+        for layer, ng in enumerate(dm.node_gdf_list):
+            node_type = node_types[layer]
+            color_node = self.node_color_list[layer]
+            for idx, row in ng.iterrows():
+                x, y = row.geometry.x, row.geometry.y  # type: ignore
+                hi = (graph is None or nid in highlighted)
+                c = color_node if hi else "lightgray"
+                s = self.markersize*(2 if nid==0 else 1) if hi else 5
+                if node_type == "users":
+                    s = self.markersize * 2
+                if nid == 0:
+                    s = self.markersize * 3
+                zorder = 6 if hi else 1
+                label = self.node_label_list[layer] if idx == 0 else None
+                if node_type == "source":
+                    self._draw_node(ax, x, y+0.36, node_type, c, s, zorder, label)
                 else:
-                    color = (
-                        self.node_color_list[i]
-                        if node_id in selected_node_ids
-                        else "lightgray"
-                    )
-                    if node_id in selected_node_ids:
-                        markersize = (
-                            self.markersize if node_id != 0 else self.markersize * 3
-                        )
-                    else:
-                        markersize = 3
-                marker = self.node_marker_list[i]
-                label = self.node_label_list[i] if idx == 0 else None
-                ax.plot(
-                    row["geometry"].x,  # type: ignore
-                    row["geometry"].y,  # type: ignore
-                    color=color,
-                    marker=marker,
-                    label=label,
-                    linestyle="None",
-                    markersize=markersize,
-                    zorder=2,
-                )
+                    self._draw_node(ax, x, y, node_type, c, s, zorder, label)
+                if min_bs_node and nid == min_bs_node.get_id():
+                    ax.add_patch(mpatches.Circle((x+0.025, y), 0.4, fill=True, facecolor="#FFE000", zorder=1))
+                if verbose or nid in vid_list:
+                    ax.text(x, y-0.2, str(nid), fontsize=8, zorder=6)
+                nid += 1
 
-                if verbose or (verbose_id is not None and node_id in verbose_id):
-                    ax.text(
-                        row["geometry"].x,  # type: ignore
-                        row["geometry"].y,  # type: ignore
-                        f"{node_id}",
-                        fontsize=12,
-                    )
-                node_id += 1
+        # 5) If graph, draw stats, edges, pies/bars
+        if graph:
+            # 5.1 stats
+            tput = graph.compute_network_throughput()/1e3
+            hops = np.mean([u.hops for u in graph.users]) if graph.users else 0
+            # dlist = [(graph.nodes[u].get_distance(graph.nodes[v]), np.log2(1+graph.nodes[u]._compute_snr(graph.nodes[v])))
+            #         for u, v in graph.edges if isinstance(graph.nodes[u], bs.BaseStation)]
+            dlist = []
+            for u, v in graph.edges:
+                if isinstance(graph.nodes[u], bs.BaseStation) and u != 0:
+                    dist = graph.nodes[u].get_distance(graph.nodes[v])
+                    se = np.log2(1 + graph.nodes[u]._compute_snr(graph.nodes[v])) * 1e3
+                    dlist.append((dist, se))
+            dist_avg = np.mean([d for d, _ in dlist]) if dlist else 0
+            se_avg   = np.mean([se for _, se in dlist]) if dlist else 0
+            dx, dy = (lon_max-lon_min)*0.02, (lat_max-lat_min)*0.02
+            stats = (f"Throughput (min): {tput:6.1f} kbps\n"
+                    f"Avg hops         : {hops:5.2f}\n"
+                    f"Avg link dist    : {dist_avg:5.1f} km\n"
+                    f"Avg spectral η   : {se_avg:5.2f} b/s/Hz")
+            ax.text(lon_max-dx, lat_max-dy, stats, ha="right", va="top",
+                    multialignment="left", fontsize=9, bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8), zorder=6)
 
-        if graph_list is not None:
-            color_list = ["black", "red", "blue", "green", "purple", "orange"]
-            for i, graph in enumerate(graph_list):
-                for edge in graph.edges:
-                    start = graph.nodes[edge[0]].get_position()
-                    end = graph.nodes[edge[1]].get_position()
-                    plt.plot(
-                        [start[0], end[0]],
-                        [start[1], end[1]],
-                        color=color_list[i],
-                        linestyle="--",
-                        linewidth=self.linewidth,
+            # 5.2 denom map
+            denom = {bsn: sum(self._link_bw_weight(bsn, ch) for ch in bsn.get_children())
+                    for bsn in graph.basestations if bsn.has_children()}
+
+            # 5.3 edges
+            for u, v in graph.edges:
+                pu, pv = graph.nodes[u], graph.nodes[v]
+                if not isinstance(pu, bs.BaseStation): continue
+                num = self._link_bw_weight(pu, pv); den = denom.get(pu, 1); ratio = num/den if den>0 else 0
+                lw = 0.8 + 1.5*ratio
+                if isinstance(pv, bs.User) and pv.hops==1: lw=0.5
+                col = "black"
+                # col = "#FF0000" if (u, v) in longest_hop_edges else "black"
+                ls = (0, (3, 1, 1, 1)) if (u, v) in longest_hop_edges else "-"
+                x0, y0, _ = pu.get_position(); x1, y1, _ = pv.get_position()
+                ax.plot([x0, x1], [y0, y1], ls=ls, color=col, linewidth=lw, zorder=4)
+                if (u, v) in longest_hop_edges:
+                    ax.plot([x0, x1], [y0, y1], ls="-", color="#FFE000", linewidth=7.5, alpha=0.8, zorder=3)
+
+            # 5.4 pies/bars
+            for bsn in graph.basestations:
+                nid_ = bsn.get_id()
+                if nid_ != 0 and nid_ in highlighted:
+                    # increase width_frac, height_frac, offset_frac, and zorder
+                    self._draw_power_bar(
+                        ax,
+                        bsn,
+                        dm,
+                        width_frac=0.01,      # was 0.01 → wider
+                        height_frac=0.03,     # was 0.03 → taller
+                        offset_frac=(0.02, 0.00),  # move further away from node
+                        zorder=10             # draw above nodes/edges
                     )
-        if legend:
-            ax.legend(loc="lower right", fontsize=8)
+            
+            # 5.5 draw bbox
+            if draw_bbox is not None:
+                lon_min, lon_max = draw_bbox[0], draw_bbox[1]
+                lat_min, lat_max = draw_bbox[2], draw_bbox[3]
+                ax.add_patch(mpatches.Rectangle((lon_min, lat_min), lon_max-lon_min, lat_max-lat_min,
+                                                fill=False, edgecolor="red", lw=1.5, zorder=10))
+
+        # 6) legend & finalize
+        if legend: ax.legend(loc="lower right", fontsize=8)
+        plt.tight_layout()
+        # save as eps
+        if save_path != "": plt.savefig(save_path, dpi=300, bbox_inches="tight", format="eps")
+        if plot: plt.show()
+
+    # ── helper: 링크별 BW-weight 계산 ─────────────────────────────────────
+    def _link_bw_weight(self, parent: bs.BaseStation, child: bs.AbstractNode) -> float:
+        """
+        Return relative bandwidth share (0~1) of link parent→child.
+        Denominator = Σ_{child∈parent.children} (sum_hops / spectral_eff).
+        """
+        # Ensure power densities are up-to-date
+        parent._set_transmission_and_jamming_power_density()
+
+        snr = parent._compute_snr(child)
+        se = np.log2(1 + snr)
+
+        # sum_hops 계산 방식은 compute_throughput과 동일
+        if isinstance(child, bs.User):
+            hops_sum = child.hops
+        else:  # child is BaseStation
+            hops_sum = sum(u.hops for u in child.connected_user)
+
+        return hops_sum / (se + 1e-9)  # numerator
+
+    def _draw_power_bar(
+        self,
+        ax,
+        node: bs.BaseStation,
+        dm: DataManager,
+        width_frac: float = 0.01,
+        height_frac: float = 0.03,
+        offset_frac: Tuple[float, float] = (0.02, 0.02),
+        zorder: int = 5,
+    ):
+        """
+        Draw two vertical bars next to the source BS:
+        - green: transmit power / max_transmit
+        - red  : jamming power  / max_jamming
+        Bars normalized so max height = height_frac * lat_range.
+        """
+        # update Tx/Jam densities
+        node._set_transmission_and_jamming_power_density()
+        tx_lin   = bs.dB_to_linear(node.transmission_power_density)
+        jam_lin  = bs.dB_to_linear(node.jamming_power_density)
+        cfg      = node.basestation_type.config
+        total_lin= bs.dB_to_linear(cfg.power_capacity)/(cfg.bandwidth*1e6)
+        tx_max   = total_lin * cfg.minimum_transit_power_ratio
+        jam_max  = total_lin * (1 - cfg.minimum_transit_power_ratio)
+        f_tx     = tx_lin/tx_max   if tx_max>0 else 0
+        f_jam    = jam_lin/jam_max if jam_max>0 else 0
+
+        lon_min, lon_max = dm.longitude_range
+        lat_min, lat_max = dm.latitude_range
+        bar_w    = (lon_max-lon_min)*width_frac
+        bar_hmax = (lat_max-lat_min)*height_frac
+
+        x0, y0,_= node.get_position()
+        dx, dy   = (lon_max-lon_min)*offset_frac[0], (lat_max-lat_min)*offset_frac[1]
+        x0 += dx; y0 += dy
+
+        # transmit bar
+        rect_tx = mpatches.Rectangle(
+            (x0, y0), bar_w, f_tx*bar_hmax,
+            facecolor="green", edgecolor="w", lw=0.8, zorder=zorder
+        )
+        # jamming bar just to the right
+        rect_jm = mpatches.Rectangle(
+            (x0+bar_w*1.2, y0), bar_w, f_jam*bar_hmax,
+            facecolor="red", edgecolor="w", lw=0.8, zorder=zorder
+        )
+        ax.add_patch(rect_tx)
+        ax.add_patch(rect_jm)
+
+def load_leo_positions(csv_path, latitude_range=[-90, 90], longitude_range=[-180, 180]):
+    """
+    Load slant observations from CSV and compute
+    (longitude, latitude, altitude) for each entry in one function.
+
+    Parameters:
+      - csv_path: path to CSV with columns 'distance','elevation','azimuth'
+      - observer_lat_deg: observer latitude in degrees
+      - observer_lon_deg: observer longitude in degrees
+
+    Returns:
+      - List of tuples: (lon_deg, lat_deg, alt_km)
+    """
+    positions = []
+
+    with open(csv_path, newline="") as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            lat_deg = float(row["lat"])
+            lon_deg = float(row["lon"])
+            alt_km = float(row["alt"])
+            if (
+                latitude_range[0] <= lat_deg <= latitude_range[1]
+                and longitude_range[0] <= lon_deg <= longitude_range[1]
+            ):
+                positions.append((lat_deg, lon_deg, alt_km))
+
+    return positions
+
+
+def load_haps_positions(
+    csv_path: str, when: dt.datetime, tol: timedelta = timedelta(hours=1.5)
+) -> list[tuple[float, float, float]]:
+    df = pd.read_csv(csv_path, parse_dates=["timestamp"])
+    mask = (df["timestamp"] >= when - tol) & (df["timestamp"] <= when + tol)
+    pos_df = df.loc[mask, ["callsign", "timestamp", "lat", "lon", "alt"]]
+
+    positions: list[tuple[float, float, float]] = list(
+        pos_df[["lat", "lon", "alt"]].itertuples(index=False, name=None)
+    )
+    
+    # Remove duplicates within 0.15 deg
+    non_duplicate_positions = []
+    for lat, lon, alt in positions:
+        if any(
+            abs(lat - pos[0]) < 0.15 and abs(lon - pos[1]) < 0.15
+            for pos in non_duplicate_positions
+        ):
+            continue
+        non_duplicate_positions.append((lat, lon))
+        
+    return non_duplicate_positions
+
+
+def load_ground_positions(
+    csv_path, latitude_range=[-90, 90], longitude_range=[-180, 180], duplicate_tol=0.15
+):
+    """
+    Extract (lat, lon) positions of LTE base stations from OpenCelliD CSV.
+
+    Parameters
+    ----------
+    csv_path : str
+        Path to the OpenCelliD-formatted CSV file.
+
+    Returns
+    -------
+    List[Tuple[float, float]]
+        List of (latitude, longitude) tuples for LTE radio type entries.
+    """
+    positions = []
+    with open(csv_path, newline="") as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            lat = float(row["lat"])
+            lon = float(row["lon"])
+            if (
+                latitude_range[0] <= lat <= latitude_range[1]
+                and longitude_range[0] <= lon <= longitude_range[1]
+            ):
+                # skip the entry if there are another bs within 0.1 deg
+                if any(
+                    abs(lat - pos[0]) < duplicate_tol and abs(lon - pos[1]) < duplicate_tol
+                    for pos in positions
+                ):
+                    continue
+                positions.append((lat, lon))
+    return positions
+
+
+def load_maritime_positions(csv_path):
+    """
+    Extract (lat, lon) positions of maritime base stations from OpenCelliD CSV.
+
+    Parameters
+    ----------
+    csv_path : str
+        Path to the OpenCelliD-formatted CSV file.
+
+    Returns
+    -------
+    List[Tuple[float, float]]
+        List of (latitude, longitude) tuples for LTE radio type entries.
+    """
+    positions = []
+    with open(csv_path, newline="") as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            lat = float(row["lat"])
+            lon = float(row["lon"])
+            positions.append((lat, lon))
+    return positions
 
 
 def main():
