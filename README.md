@@ -54,14 +54,13 @@ ______________________________________________________________________
 ## Reference
 If you find the code is helpful, please refer our paper!
 ```
-@ARTICLE{10791413,
-  author={Lyu, Hyeonsu and Jang, Jonggyu and Lee, Harim and Yang, Hyun Jong},
-  journal={IEEE Transactions on Wireless Communications}, 
-  title={Non-iterative Optimization of Trajectory and Radio Resource for Aerial Network}, 
-  year={2024},
-  volume={},
-  number={},
-  pages={1-1},
-  keywords={Trajectory;Optimization;Quality of service;Wireless communication;Downlink;Internet of Things;Resource management;Power control;Iterative methods;Markov decision processes;Trajectory-planning;user association;resource allocation;power control;quality-of-service;Markov decision process},
-  doi={10.1109/TWC.2024.3510043}}
+@misc{lyu2025-SSIR,
+    title={Secure Multi-Hop Relaying in Large-Scale Space-Air-Ground-Sea Integrated Networks}, 
+    author={Hyeonsu Lyu and Hyeonho Noh and Hyun Jong Yang and Kaushik Chowdhury},
+    year={2025},
+    eprint={2505.00573},
+    archivePrefix={arXiv},
+    primaryClass={eess.SP},
+    url={https://arxiv.org/abs/2505.00573}, 
+}
 ```
