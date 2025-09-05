@@ -2,10 +2,6 @@
 
 # SSIR: Secure SAGSIN IAB Relay Network
 
-![GitHub release (latest SemVer)](https://img.shields.io/badge/release-v0.1.0-blue)
-[![Read the Docs](https://img.shields.io/readthedocs/torch-influence)](asdf/)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE.txt)
-
 </div>
 
 SSIR is a comprehensive implementation of multi-hop relaying space-air-ground-sea integrated networks; and an official implementation of the paper titled "-".
