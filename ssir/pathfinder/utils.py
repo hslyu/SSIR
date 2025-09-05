@@ -97,7 +97,7 @@ def get_solution_graph(
 
 
 def get_best_candidate_graph(
-    base_graph: bs.IABRelayGraph, user_id, path_list: List[List[int]]
+    base_graph: bs.IABRelayGraph, user_id, path_list: List[List[int]], return_steps: bool=False
 ):
     """
     Returns the best candidate graph (highest throughput) for a given user,
@@ -105,11 +105,20 @@ def get_best_candidate_graph(
     """
     best_throughput = -1
     best_path = []
+    steps = []
 
     # Try all paths and choose the one with the highest throughput
     for path in path_list:
         added_edges = get_aborescence_graph(base_graph, path)
         throughput = base_graph.compute_network_throughput(path[1:-1])
+        if return_steps:
+            step = base_graph.copy()
+            connected_user = []
+            for user in step.users:
+                if len(user.get_parent())!=0:
+                    connected_user.append(user)
+            step.users = connected_user
+            steps.append(step)
 
         if throughput > best_throughput:
             best_throughput = throughput
@@ -123,6 +132,8 @@ def get_best_candidate_graph(
     else:
         raise ValueError("No path found.")
 
+    if return_steps:
+        return best_throughput, best_added_edges, steps
     return best_throughput, best_added_edges
 
 

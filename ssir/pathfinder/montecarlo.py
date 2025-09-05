@@ -12,6 +12,8 @@ def get_solution_graph(
     num_rounds: int = 5,
     num_trials: int = 3,
     verbose=False,
+    return_steps=False,
+    return_path_steps=False,
 ):
     """
     Builds a solution graph by iteratively choosing the best paths for each user
@@ -19,6 +21,9 @@ def get_solution_graph(
     """
     graph_list = []
     throughput_list = []
+    # steps: List[Tuple[bs.IABRelayGraph, Dict[str, Any]]] = []
+    steps = []
+    path_steps = []
 
     _, pred = a_star(graph, metric="hop")
     # Sort the user IDs by distance from the source
@@ -30,7 +35,7 @@ def get_solution_graph(
         reverse=True,
     )
 
-    for _ in range(num_trials):
+    for trial_idx in range(num_trials):
         # Generate multiple predecessor lists for different metrics
         metrics = ["hop", "distance"] + ["random"] * num_predecessors
         predecessors_list = []
@@ -46,7 +51,6 @@ def get_solution_graph(
 
         updated = True
         update_round = 0
-        source = graph.nodes[0]
 
         old_throughput = -1
         while updated and update_round < num_rounds:
@@ -64,9 +68,15 @@ def get_solution_graph(
                 deleted_edges = utils.delete_user(result_graph, user_id)
 
                 # Find the best reconnection for this user
-                best_throughput, best_added_edges = utils.get_best_candidate_graph(
-                    result_graph, user_id, all_shortest_paths[user_id]
-                )
+                if return_path_steps and trial_idx==0 and update_round==0:
+                    best_throughput, best_added_edges, user_steps = utils.get_best_candidate_graph(
+                        result_graph, user_id, all_shortest_paths[user_id], return_path_steps
+                    )
+                    path_steps.append(user_steps)
+                else:
+                    best_throughput, best_added_edges = utils.get_best_candidate_graph(
+                        result_graph, user_id, all_shortest_paths[user_id]
+                    )
                 best_throughput = result_graph.compute_network_throughput()
 
                 if update_round == 0 or best_throughput > old_throughput:
@@ -78,6 +88,15 @@ def get_solution_graph(
                     for p, c in deleted_edges:
                         result_graph.add_edge(p, c)
                     result_graph.compute_hops_for_one_user(user_id)
+                
+                if return_steps and trial_idx==0 and update_round==0:
+                    step = result_graph.copy()
+                    connected_user = []
+                    for user in step.users:
+                        if len(user.get_parent())!=0:
+                            connected_user.append(user)
+                    step.users = connected_user
+                    steps.append(step)
 
             update_round += 1
             if verbose:
@@ -91,4 +110,10 @@ def get_solution_graph(
     best_idx = throughput_list.index(max(throughput_list))
     best_graph = graph_list[best_idx]
 
+    if return_steps and return_path_steps:
+        return best_graph, steps, path_steps
+    elif return_steps and not return_path_steps:
+        return best_graph, steps
+    elif return_path_steps and not return_steps:
+        return best_graph, path_steps
     return best_graph

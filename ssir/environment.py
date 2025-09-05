@@ -648,7 +648,7 @@ class PlotManager:
                 x, y = row.geometry.x, row.geometry.y  # type: ignore
                 hi = (graph is None or nid in highlighted)
                 c = color_node if hi else "lightgray"
-                s = self.markersize*(2 if nid==0 else 1) if hi else 5
+                s = self.markersize*(2 if nid==0 else 2) if hi else 5
                 if node_type == "users":
                     s = self.markersize * 2
                 if nid == 0:
@@ -686,7 +686,7 @@ class PlotManager:
                     f"Avg link dist    : {dist_avg:5.1f} km\n"
                     f"Avg spectral η   : {se_avg:5.2f} b/s/Hz")
             ax.text(lon_max-dx, lat_max-dy, stats, ha="right", va="top",
-                    multialignment="left", fontsize=9, bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8), zorder=6)
+                    multialignment="left", fontsize=9, bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=1), zorder=6)
 
             # 5.2 denom map
             denom = {bsn: sum(self._link_bw_weight(bsn, ch) for ch in bsn.get_children())
@@ -705,7 +705,7 @@ class PlotManager:
                 x0, y0, _ = pu.get_position(); x1, y1, _ = pv.get_position()
                 ax.plot([x0, x1], [y0, y1], ls=ls, color=col, linewidth=lw, zorder=4)
                 if (u, v) in longest_hop_edges:
-                    ax.plot([x0, x1], [y0, y1], ls="-", color="#FFE000", linewidth=7.5, alpha=0.8, zorder=3)
+                    ax.plot([x0, x1], [y0, y1], ls="-", color="#FFE000", linewidth=7.5, alpha=1, zorder=3)
 
             # 5.4 pies/bars
             for bsn in graph.basestations:
