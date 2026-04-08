@@ -26,19 +26,24 @@ Usage:
 """
 
 import argparse
+import json
 import logging
+import multiprocessing as mp
+import pickle
+import random
+import time
 from pathlib import Path
 
 import numpy as np
+from tqdm import tqdm
 
 import ssir.basestations as bs
 from ssir.pathfinder.data_collection import (
     CollectionConfig,
-    EpisodeCollector,
-    ParallelEpisodeCollector,
-    compute_normalization_stats,
+    CollectionStats,
 )
-from ssir.pathfinder.data_collection.data_schema import load_episode
+from ssir.pathfinder.data_collection.data_schema import load_episode, save_episode
+from ssir.pathfinder.data_collection.episode_generator import generate_episode
 
 logging.basicConfig(
     level=logging.INFO,
@@ -66,6 +71,131 @@ def split_episode_budget(total_episodes: int, num_graphs: int) -> list[int]:
     base = total_episodes // num_graphs
     remainder = total_episodes % num_graphs
     return [base + (1 if idx < remainder else 0) for idx in range(num_graphs)]
+
+
+def _generate_episode_task(args: tuple) -> dict:
+    """
+    Generate a single episode in a worker process.
+
+    The task loads its graph, samples the episode configuration, generates the
+    episode, and writes it to the graph-specific output directory.
+    """
+    episode_id, graph_path, config, output_dir = args
+
+    with open(graph_path, "rb") as f:
+        graph = pickle.load(f)
+
+    for bs_node in graph.basestations:
+        bs_node._set_transmission_and_jamming_power_density()
+
+    rng = random.Random(config.seed + episode_id)
+    start_time = time.time()
+    stats = {
+        "episode_id": episode_id,
+        "num_users": 0,
+        "total_candidates": 0,
+        "throughputs": [],
+        "candidates_per_user": [],
+        "config_key": "",
+        "error": None,
+    }
+
+    try:
+        episode_kind = (
+            rng.choice(["spsc", "density"])
+            if config.episode_mode == "mixed"
+            else config.episode_mode
+        )
+
+        episode_graph = graph.copy()
+        original_tau = bs.environmental_variables.SPSC_probability
+
+        if episode_kind == "spsc":
+            spsc = rng.choice(config.spsc_thresholds)
+            density = sum(
+                float(node.basestation_type.config.eavesdropper_density)
+                for node in episode_graph.basestations
+            ) / len(episode_graph.basestations)
+            bs.environmental_variables.SPSC_probability = spsc
+            config_key = f"spsc:{spsc:.4f}"
+        else:
+            spsc = bs.environmental_variables.SPSC_probability
+            density = rng.choice(config.eavesdropper_densities)
+            for bs_node in episode_graph.basestations:
+                bs_node.basestation_type.config.eavesdropper_density = density
+            config_key = f"density:{density:.2e}"
+
+        episode = generate_episode(
+            master_graph=episode_graph,
+            spsc_threshold=spsc,
+            eavesdropper_density=density,
+            episode_id=episode_id,
+            num_candidates_per_user=config.candidates_per_user,
+            epsilon=config.epsilon,
+        )
+
+        episode_path = Path(output_dir) / f"episode_{episode_id:06d}.pkl"
+        save_episode(episode, episode_path)
+
+        stats["num_users"] = len(episode.entries)
+        stats["config_key"] = config_key
+
+        for entry in episode.entries:
+            stats["throughputs"].extend(entry.true_throughputs)
+            stats["candidates_per_user"].append(len(entry.candidate_routes))
+            stats["total_candidates"] += len(entry.candidate_routes)
+
+    except Exception as e:
+        logger.error(f"Episode {episode_id} failed: {e}")
+        stats["error"] = str(e)
+        raise
+    finally:
+        bs.environmental_variables.SPSC_probability = original_tau
+
+    stats["runtime_seconds"] = time.time() - start_time
+    return stats
+
+
+def _aggregate_episode_results(results: list[dict], runtime: float) -> CollectionStats:
+    """
+    Aggregate per-episode results into dataset-level statistics.
+    """
+    total_users = 0
+    total_candidates = 0
+    all_throughputs = []
+    all_candidates_per_user = []
+    episodes_by_config: dict[str, int] = {}
+
+    for result in results:
+        if result.get("error"):
+            continue
+
+        total_users += result["num_users"]
+        total_candidates += result["total_candidates"]
+        all_throughputs.extend(result["throughputs"])
+        all_candidates_per_user.extend(result["candidates_per_user"])
+
+        config_key = result.get("config_key", "unknown")
+        episodes_by_config[config_key] = episodes_by_config.get(config_key, 0) + 1
+
+    if not all_throughputs:
+        raise ValueError("No throughputs collected")
+
+    return CollectionStats(
+        num_episodes=len(results),
+        total_users=total_users,
+        total_candidates=total_candidates,
+        throughput_global_min=min(all_throughputs),
+        throughput_global_max=max(all_throughputs),
+        throughput_global_mean=sum(all_throughputs) / len(all_throughputs),
+        candidates_per_user_mean=(
+            sum(all_candidates_per_user) / len(all_candidates_per_user)
+        ),
+        candidates_per_user_min=min(all_candidates_per_user),
+        candidates_per_user_max=max(all_candidates_per_user),
+        episodes_by_config=episodes_by_config,
+        runtime_seconds=runtime,
+    )
 
 
 def main():
@@ -98,7 +228,7 @@ def main():
     parser.add_argument(
         "--num-workers",
         type=int,
-        default=13,
+        default=60,
         help="Number of worker processes",
     )
     parser.add_argument(
@@ -169,6 +299,16 @@ def main():
     graph_dir = Path(args.graph_dir)
     graph_files = discover_graph_files(graph_dir)
     episode_counts = split_episode_budget(args.num_episodes, len(graph_files))
+    config = CollectionConfig(
+        num_episodes=args.num_episodes,
+        candidates_per_user=args.candidates_per_user,
+        epsilon=args.epsilon,
+        output_dir=str(output_dir),
+        spsc_thresholds=args.spsc_thresholds,
+        eavesdropper_densities=args.eavesdropper_densities,
+        seed=args.seed,
+        verbose=args.verbose,
+    )
 
     logger.info("=" * 70)
     logger.info("Throughput Predictor - Data Collection")
@@ -183,7 +323,6 @@ def main():
     logger.info(f"Eavesdropper densities: {args.eavesdropper_densities}")
     logger.info("=" * 70 + "\n")
 
-    all_stats = []
     total_assigned = sum(episode_counts)
     logger.info(
         f"Distributing {total_assigned} episodes across {len(graph_files)} graphs"
@@ -197,62 +336,81 @@ def main():
         )
     )
 
+    episode_tasks = []
+    episode_id = 0
     for graph_path, num_graph_episodes in zip(graph_files, episode_counts):
         if num_graph_episodes <= 0:
             continue
 
-        graph = bs.IABRelayGraph()
-        graph.load_graph(str(graph_path))
-
         graph_output_dir = output_dir / graph_path.parent.name
-        config = CollectionConfig(
-            num_episodes=num_graph_episodes,
-            candidates_per_user=args.candidates_per_user,
-            epsilon=args.epsilon,
-            output_dir=str(graph_output_dir),
-            spsc_thresholds=args.spsc_thresholds,
-            eavesdropper_densities=args.eavesdropper_densities,
-            seed=args.seed,
-            verbose=args.verbose,
-        )
-
+        graph_output_dir.mkdir(parents=True, exist_ok=True)
         logger.info(
-            f"Collecting {num_graph_episodes} episodes from {graph_path.parent.name}..."
+            f"Assigning {num_graph_episodes} episodes to {graph_path.parent.name}"
         )
-        if args.num_workers > 1:
-            collector = ParallelEpisodeCollector(config, num_workers=args.num_workers)
-        else:
-            collector = EpisodeCollector(config)
+        for _ in range(num_graph_episodes):
+            episode_tasks.append(
+                (episode_id, str(graph_path), config, str(graph_output_dir))
+            )
+            episode_id += 1
 
-        try:
-            stats = collector.collect(graph)
-            all_stats.append(stats)
-        finally:
-            collector.close()
+    logger.info(f"Total episode tasks: {len(episode_tasks)}")
+
+    start_time = time.time()
+    if len(episode_tasks) == 0:
+        episode_results = []
+    elif args.num_workers <= 1 or len(episode_tasks) == 1:
+        episode_results = [_generate_episode_task(task) for task in episode_tasks]
+    else:
+        actual_workers = min(args.num_workers, len(episode_tasks))
+        logger.info(f"Using {actual_workers} worker processes")
+        with mp.Pool(processes=actual_workers) as pool:
+            episode_results = list(
+                tqdm(
+                    pool.imap_unordered(
+                        _generate_episode_task, episode_tasks, chunksize=1
+                    ),
+                    total=len(episode_tasks),
+                    desc="Episodes",
+                )
+            )
+
+    runtime = time.time() - start_time
+    if episode_results:
+        stats = _aggregate_episode_results(episode_results, runtime)
+    else:
+        stats = CollectionStats(
+            num_episodes=0,
+            total_users=0,
+            total_candidates=0,
+            throughput_global_min=0.0,
+            throughput_global_max=0.0,
+            throughput_global_mean=0.0,
+            candidates_per_user_mean=0.0,
+            candidates_per_user_min=0,
+            candidates_per_user_max=0,
+            episodes_by_config={},
+            runtime_seconds=runtime,
+        )
+
+    stats_path = output_dir / "collection_stats.json"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with open(stats_path, "w") as f:
+        json.dump(stats.to_dict(), f, indent=2)
 
     # Summary
     logger.info("\n" + "=" * 70)
     logger.info("Collection Complete!")
     logger.info("=" * 70)
-    if all_stats:
-        total_episodes = sum(stat.num_episodes for stat in all_stats)
-        total_users = sum(stat.total_users for stat in all_stats)
-        total_candidates = sum(stat.total_candidates for stat in all_stats)
-        throughput_min = min(stat.throughput_global_min for stat in all_stats)
-        throughput_max = max(stat.throughput_global_max for stat in all_stats)
-        throughput_mean = sum(
-            stat.throughput_global_mean * stat.total_candidates for stat in all_stats
-        ) / max(sum(stat.total_candidates for stat in all_stats), 1)
-        logger.info(f"Episodes collected: {total_episodes}")
-        logger.info(f"Total users: {total_users}")
-        logger.info(f"Total candidates: {total_candidates}")
-        logger.info(
-            f"Throughput range: {throughput_min:.2e} - {throughput_max:.2e} bps"
-        )
-        logger.info(f"Mean throughput: {throughput_mean:.2e} bps")
-    else:
-        logger.info("No episodes were collected.")
-    logger.info(f"Runtime: {sum(stat.runtime_seconds for stat in all_stats):.2f}s")
+    logger.info(f"Episodes collected: {stats.num_episodes}")
+    logger.info(f"Total users: {stats.total_users}")
+    logger.info(f"Total candidates: {stats.total_candidates}")
+    logger.info(
+        f"Throughput range: {stats.throughput_global_min:.2e} - "
+        f"{stats.throughput_global_max:.2e} bps"
+    )
+    logger.info(f"Mean throughput: {stats.throughput_global_mean:.2e} bps")
+    logger.info(f"Runtime: {stats.runtime_seconds:.2f}s")
+    logger.info(f"Stats saved to: {stats_path}")
     logger.info("=" * 70)
 
     # Compute normalization stats
@@ -266,6 +424,13 @@ def main():
             episode = load_episode(episode_file)
             for entry in episode.entries:
                 all_throughputs.extend(entry.true_throughputs)
+
+        if not all_throughputs:
+            logger.info("No episodes found for normalization stats; skipping.")
+            logger.info(f"\nEpisodes saved to: {output_dir}")
+            logger.info("\nNext step: Train the model with:")
+            logger.info(f"  python scripts/train_nn.py --data-dir {output_dir}")
+            return
 
         from ssir.pathfinder.data_collection.normalization import (
             compute_normalization_stats,
