@@ -96,6 +96,7 @@ class EpisodeCollector:
         )
         logger.addHandler(handler)
         logger.setLevel(logging.INFO)
+        self._handler = handler
 
         # Stats tracking
         self.episode_counter = 0
@@ -184,6 +185,12 @@ class EpisodeCollector:
         logger.info(f"Stats: {asdict(stats)}")
 
         return stats
+
+    def close(self) -> None:
+        if getattr(self, "_handler", None) is not None:
+            logger.removeHandler(self._handler)
+            self._handler.close()
+            self._handler = None
 
     def _sample_episode_kind(self) -> str:
         if self.config.episode_mode == "mixed":

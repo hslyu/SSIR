@@ -57,7 +57,7 @@ def _get_node_features(
     - position: lat, lon, alt
     - hops from source (in current graph state)
     - num_connected_users (for base stations)
-    - config features (power_capacity, bandwidth, etc.)
+    - config features (power_capacity, bandwidth, etc.) for base stations only
 
     Args:
         master_graph: The full network topology
@@ -72,9 +72,19 @@ def _get_node_features(
     # Compute hops in current graph state
     hops = _compute_hops(current_graph)
 
-    # Environmental variables
-    tau = current_graph.environmental_variables.SPSC_probability
-    noise_density = current_graph.environmental_variables.noise_power_density
+    # Config feature keys that we know exist in BaseStationConfig
+    config_feature_keys = [
+        'power_capacity',
+        'minimum_transit_power_ratio',
+        'carrier_frequency',
+        'bandwidth',
+        'transmit_antenna_gain',
+        'receive_antenna_gain',
+        'antenna_gain_to_noise_temperature',
+        'pathloss_exponent',
+        'eavesdropper_density',
+        'maximum_link_distance',
+    ]
 
     features_list = []
 
@@ -125,12 +135,12 @@ def _get_node_features(
             config = master_node.config
             config_features = [
                 float(getattr(config, key, 0.0))
-                for key in bs.NODE_CONFIG_FEATURE_KEYS
+                for key in config_feature_keys
             ]
             node_features.extend(config_features)
         else:
             # Pad with zeros if not a base station
-            node_features.extend([0.0] * len(bs.NODE_CONFIG_FEATURE_KEYS))
+            node_features.extend([0.0] * len(config_feature_keys))
 
         features_list.append(node_features)
 
@@ -254,7 +264,7 @@ def encode_graph_state(
     return data
 
 
-def get_node_feature_dim(master_graph: bs.IABRelayGraph) -> int:
+def get_node_feature_dim(master_graph: bs.IABRelayGraph | None = None) -> int:
     """
     Get the dimension of node features for a graph.
 
@@ -263,8 +273,11 @@ def get_node_feature_dim(master_graph: bs.IABRelayGraph) -> int:
     """
     # Base features: node_id, node_type, lat, lon, alt, hops, num_connected_users
     base_dim = 7
-    # Config features
-    config_dim = len(bs.NODE_CONFIG_FEATURE_KEYS)
+    # Config features: power_capacity, minimum_transit_power_ratio, carrier_frequency,
+    #                  bandwidth, transmit_antenna_gain, receive_antenna_gain,
+    #                  antenna_gain_to_noise_temperature, pathloss_exponent,
+    #                  eavesdropper_density, maximum_link_distance
+    config_dim = 10
     return base_dim + config_dim
 
 

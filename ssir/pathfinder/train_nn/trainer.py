@@ -360,14 +360,27 @@ class ThroughputTrainer:
         Args:
             history: Training history dictionary
         """
+        def convert_to_native(obj):
+            """Recursively convert numpy/torch types to native Python types."""
+            if isinstance(obj, dict):
+                return {k: convert_to_native(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [convert_to_native(v) for v in obj]
+            elif hasattr(obj, 'item'):  # torch tensor or numpy scalar
+                return float(obj.item())
+            elif isinstance(obj, (float, int, str, bool, type(None))):
+                return obj
+            else:
+                return float(obj)  # Fallback for other numeric types
+
         # Convert non-serializable objects
         history_json = {
-            "train_loss": history["train_loss"],
-            "val_loss": history["val_loss"],
+            "train_loss": convert_to_native(history["train_loss"]),
+            "val_loss": convert_to_native(history["val_loss"]),
             "best_epoch": history["best_epoch"],
             "best_val_loss": float(history["best_val_loss"]),
-            "train_metrics": history["train_metrics"],
-            "val_metrics": history["val_metrics"],
+            "train_metrics": convert_to_native(history["train_metrics"]),
+            "val_metrics": convert_to_native(history["val_metrics"]),
         }
 
         path = self.checkpoint_dir / "training_history.json"

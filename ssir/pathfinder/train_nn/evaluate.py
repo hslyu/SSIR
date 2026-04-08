@@ -193,15 +193,23 @@ class ModelEvaluator:
         absolute_errors = np.abs(predictions_denorm - targets_denorm)
         relative_errors = absolute_errors / (np.abs(targets_denorm) + 1e-8)
 
+        # Filter out infinite and NaN values for plotting
+        valid_abs_mask = np.isfinite(absolute_errors)
+        valid_rel_mask = np.isfinite(relative_errors)
+        abs_errors_valid = absolute_errors[valid_abs_mask]
+        rel_errors_valid = relative_errors[valid_rel_mask]
+
         fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
-        axes[0].hist(absolute_errors, bins=50, edgecolor='black')
+        if len(abs_errors_valid) > 0:
+            axes[0].hist(abs_errors_valid, bins=50, edgecolor='black')
         axes[0].set_xlabel('Absolute Error (bps)')
         axes[0].set_ylabel('Frequency')
         axes[0].set_title('Absolute Error Distribution')
         axes[0].grid(True, alpha=0.3, axis='y')
 
-        axes[1].hist(relative_errors, bins=50, edgecolor='black')
+        if len(rel_errors_valid) > 0:
+            axes[1].hist(rel_errors_valid, bins=50, edgecolor='black')
         axes[1].set_xlabel('Relative Error (fraction)')
         axes[1].set_ylabel('Frequency')
         axes[1].set_title('Relative Error Distribution')
@@ -218,13 +226,13 @@ class ModelEvaluator:
             "metrics": {k: float(v) if isinstance(v, (np.floating, np.integer)) else v
                        for k, v in metrics.items()},
             "error_stats": {
-                "absolute_error_mean": float(absolute_errors.mean()),
-                "absolute_error_std": float(absolute_errors.std()),
-                "absolute_error_min": float(absolute_errors.min()),
-                "absolute_error_max": float(absolute_errors.max()),
-                "relative_error_mean": float(relative_errors.mean()),
-                "relative_error_std": float(relative_errors.std()),
-                "relative_error_p95": float(np.percentile(relative_errors, 95)),
+                "absolute_error_mean": float(abs_errors_valid.mean()) if len(abs_errors_valid) > 0 else float('nan'),
+                "absolute_error_std": float(abs_errors_valid.std()) if len(abs_errors_valid) > 0 else float('nan'),
+                "absolute_error_min": float(abs_errors_valid.min()) if len(abs_errors_valid) > 0 else float('nan'),
+                "absolute_error_max": float(abs_errors_valid.max()) if len(abs_errors_valid) > 0 else float('nan'),
+                "relative_error_mean": float(rel_errors_valid.mean()) if len(rel_errors_valid) > 0 else float('nan'),
+                "relative_error_std": float(rel_errors_valid.std()) if len(rel_errors_valid) > 0 else float('nan'),
+                "relative_error_p95": float(np.percentile(rel_errors_valid, 95)) if len(rel_errors_valid) > 0 else float('nan'),
             },
         }
 

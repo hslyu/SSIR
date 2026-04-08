@@ -170,7 +170,7 @@ def main():
         logger.error(f"Data directory not found: {data_dir}")
         sys.exit(1)
 
-    episode_files = sorted(data_dir.glob("episode_*.pkl"))
+    episode_files = sorted(data_dir.rglob("episode_*.pkl"))
     if not episode_files:
         logger.error(f"No episode files found in {data_dir}")
         sys.exit(1)
