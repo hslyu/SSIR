@@ -9,10 +9,9 @@ class GraphQNetwork(nn.Module):
         self,
         input_channels=15,
         embedding_channels=64,
-        num_conv_layers=2,
-        num_fc_layers=2,
+        num_conv_layers=3,
         use_residual=True,
-        heads=4,
+        heads=2,
     ):
         """
         Integrated graph Q-network using GATConv with edge weights.
@@ -27,18 +26,24 @@ class GraphQNetwork(nn.Module):
         super(GraphQNetwork, self).__init__()
         self.use_residual = use_residual
 
-        # Linear mapping for input features to desired embedding dimension.
-        self.linear_in = nn.Linear(input_channels, embedding_channels)
-
         # Build GATConv layers with edge_dim=1 (for se_inverse as scalar weight).
         self.conv_layers = nn.ModuleList()
-        for _ in range(num_conv_layers):
+        self.conv_layers.append(
+            GATConv(
+                input_channels,
+                embedding_channels,
+                heads=heads,
+                edge_dim=1,
+                concat=False,
+            )
+        )
+        for _ in range(num_conv_layers - 1):
             self.conv_layers.append(
                 GATConv(
                     embedding_channels,
                     embedding_channels,
                     heads=heads,
-                    edge_dim=3,
+                    edge_dim=1,
                     concat=False,
                 )
             )
@@ -53,16 +58,14 @@ class GraphQNetwork(nn.Module):
 
         # Preprocess edge attributes:
         spectral_efficiency_inverse = 1e6 / edge_attr[:, 2]
-        edge_attr[:, 2] = spectral_efficiency_inverse
-        # edge_weight = spectral_efficiency_inverse.unsqueeze(1)
+        edge_weight = spectral_efficiency_inverse.unsqueeze(1)
 
         batch = data.batch if hasattr(data, "batch") else None
 
-        x = F.gelu(self.linear_in(x))
         # Apply stacked GATConv layers with optional residual connections.
         for idx, conv in enumerate(self.conv_layers):
             identity = x
-            x = conv(x, edge_index, edge_attr)
+            x = conv(x, edge_index, edge_weight)
             if self.use_residual and idx > 0:
                 if identity.shape == x.shape:
                     x = F.gelu(x + identity)

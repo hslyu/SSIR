@@ -8,7 +8,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def train():
-    state_channels = 15
+    state_channels = 17
     action_dim = 50
     window_size = 30
     num_episodes = 10000
@@ -36,16 +36,16 @@ def train():
     )
 
     performance_list = deque(maxlen=window_size)
-    best_performance = 0
+    best_performance = float("-inf")
     for i in range(num_episodes):
         state = env.reset()
         IABagent.set_master_graph(env.master_graph)
 
         done = False
-        reward = 0
+        info = {}
         while not done:
             action = IABagent.act(state)
-            next_state, reward, done, _ = env.step(action)
+            next_state, reward, done, info = env.step(action)
             IABagent.step(state, action, reward, next_state, done)
             state = next_state
 
@@ -54,17 +54,17 @@ def train():
                 if len(IABagent.memory) > IABagent.batch_size:
                     experiences = IABagent.memory.sample()
                     IABagent.learn(experiences)
-        total_user = len(env.state.users)
-        served_user = len(env.state.basestations[0].connected_user)
 
-        throughput = env.state.compute_network_throughput()
-        genetic_throughput = env.genetic_graph.compute_network_throughput()
-        performance_list.append(throughput / genetic_throughput * 100)
+        metrics = info.get("metrics", env.prev_metrics or {})
+        throughput = metrics.get("min_throughput", env.state.compute_network_throughput())
+        performance_list.append(throughput)
         avg_performance = sum(performance_list) / len(performance_list)
         print(
-            f"Episode {i+1}/{num_episodes}, loss: {IABagent.latest_loss:.2f}, moving average: {avg_performance:.1f}%, "
-            + f"throughput: {throughput:.2f}, genetic: {throughput/genetic_throughput*100:.1f}%, "
-            + f"epsilon: {IABagent.epsilon:.2f}"  # , Unserved user: {total_user - served_user}"
+            f"Episode {i+1}/{num_episodes}, loss: {IABagent.latest_loss:.2f}, "
+            + f"moving average throughput: {avg_performance:.2f}, "
+            + f"throughput: {throughput:.2f}, "
+            + f"served_user: {metrics.get('connected_users', 0)}/{metrics.get('total_users', 0)}, "
+            + f"epsilon: {IABagent.epsilon:.2f}"
         )
         if avg_performance > best_performance:
             best_performance = avg_performance

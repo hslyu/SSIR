@@ -1,7 +1,8 @@
+import multiprocessing as mp
 import os
 import random
 from collections import deque, namedtuple
-from typing import List
+from typing import Dict, List
 
 import numpy as np
 import torch
@@ -9,7 +10,7 @@ from torch import nn
 from torch_geometric.data import Batch
 
 import ssir.basestations as bs
-from ssir.pathfinder import astar, rl
+from ssir.pathfinder import astar, rl, utils
 
 # Experience tuple for storing transitions
 Experience = namedtuple(
@@ -21,6 +22,37 @@ def xavier_init(m):
     if isinstance(m, nn.Linear):
         nn.init.xavier_uniform_(m.weight)
         m.bias.data.fill_(0.01)
+
+
+def _candidate_eval_targets_from_path(graph, path):
+    return [
+        node_id
+        for node_id in path[1:-1]
+        if isinstance(graph.nodes[node_id], bs.BaseStation)
+    ]
+
+
+def _evaluate_candidate_worker(payload):
+    state, path = payload
+    candidate_state = state.copy()
+    utils.get_aborescence_graph(candidate_state, list(path))
+    eval_targets = _candidate_eval_targets_from_path(candidate_state, path)
+    if eval_targets:
+        value = float(candidate_state.compute_network_throughput(eval_targets))
+        if not np.isfinite(value):
+            value = float(candidate_state.compute_network_throughput())
+    else:
+        value = float(candidate_state.compute_network_throughput())
+    if not np.isfinite(value):
+        value = 0.0
+    edge_signature = tuple(
+        sorted(
+            (from_node_id, to_node_id)
+            for from_node_id, neighbors in candidate_state.adjacency_list.items()
+            for to_node_id in neighbors
+        )
+    )
+    return candidate_state, eval_targets, value, edge_signature
 
 
 class Agent:
@@ -41,6 +73,8 @@ class Agent:
         batch_size=512,
         n_step=5,
         deterministic=False,
+        expert_guidance_prob=0.35,
+        num_candidate_workers=0,
         device: str | torch.device = "",
     ):
         if device == "":
@@ -48,7 +82,10 @@ class Agent:
 
         # Graph variables
         self.master_graph: bs.IABRelayGraph | None = None
+        self.expert_graph: bs.IABRelayGraph | None = None
         self.predecessors_list = []
+        self.candidate_path_cache: Dict[int, List[List[int]]] = {}
+        self.expert_path_cache: Dict[int, List[int]] = {}
 
         # Agent variables
         self.epsilon = epsilon
@@ -86,10 +123,18 @@ class Agent:
         )
         self.batch_size = batch_size
         self.deterministic = deterministic
+        self.expert_guidance_prob = expert_guidance_prob
+        self.num_candidate_workers = num_candidate_workers
+        self._candidate_pool = None
         self.device = device
 
-    def set_master_graph(self, master_graph: bs.IABRelayGraph):
+    def set_master_graph(
+        self,
+        master_graph: bs.IABRelayGraph,
+        expert_graph: bs.IABRelayGraph | None = None,
+    ):
         self.master_graph = master_graph
+        self.expert_graph = expert_graph
         self.predecessors_list = []
         _, predecessors = astar.a_star(self.master_graph, metric="hop")
         self.predecessors_list.append(predecessors)
@@ -100,6 +145,8 @@ class Agent:
         for _ in range(self.num_action - 2):
             _, predecessors = astar.a_star(self.master_graph, metric="random")
             self.predecessors_list.append(predecessors)
+        self.candidate_path_cache = self._build_candidate_path_cache()
+        self.expert_path_cache = self._build_expert_path_cache()
 
     def load_network(self, path):
         self.target_q_network.load_state_dict(torch.load(path))
@@ -133,6 +180,10 @@ class Agent:
         )
 
     def act(self, state: bs.IABRelayGraph):
+        next_state, _ = self.select_action(state)
+        return next_state
+
+    def select_action(self, state: bs.IABRelayGraph):
         """
         Returns actions for given state as per current policy.
 
@@ -150,46 +201,194 @@ class Agent:
         if target_user is None:
             raise ValueError("All users are connected to a base station.")
 
-        # Exploration
+        (
+            candidate_state_list,
+            candidate_eval_targets,
+            candidate_min_throughputs,
+            expert_index,
+        ) = self._build_candidate_states(state, target_user)
+
+        if (
+            not self.deterministic
+            and expert_index is not None
+            and random.random() < self.expert_guidance_prob
+        ):
+            return candidate_state_list[expert_index], {
+                "target_user_id": target_user.get_id(),
+                "candidate_state_list": candidate_state_list,
+                "candidate_eval_targets": candidate_eval_targets,
+                "candidate_min_throughputs": candidate_min_throughputs,
+                "selected_index": expert_index,
+                "expert_index": expert_index,
+                "selection_mode": "expert",
+            }
+
         if random.random() < self.epsilon:
-            index = random.randint(0, self.num_action - 1)
-            predecessors = self.predecessors_list[index]
-            path = astar.get_shortest_path(predecessors, target_user.get_id())
-            next_state = self.get_aborescence_graph(state, path)
-            return next_state
+            index = random.randint(0, len(candidate_state_list) - 1)
+            return candidate_state_list[index], {
+                "target_user_id": target_user.get_id(),
+                "candidate_state_list": candidate_state_list,
+                "candidate_eval_targets": candidate_eval_targets,
+                "candidate_min_throughputs": candidate_min_throughputs,
+                "selected_index": index,
+                "expert_index": expert_index,
+                "selection_mode": "epsilon",
+            }
+
+        if self.deterministic:
+            best_index = int(np.argmax(candidate_min_throughputs))
         else:
-            # Exploitation: generate multiple candidate paths and select the one with highest Q value.
+            candidate_data_list = [
+                self._convert_state_to_data(s) for s in candidate_state_list
+            ]
+            candidate_batch = Batch.from_data_list(candidate_data_list).to(  # type: ignore
+                self.device
+            )
+            self.local_q_network.eval()
+            with torch.no_grad():
+                q_values = self.local_q_network(candidate_batch)
+            self.local_q_network.train()
+            best_index = int(torch.argmax(q_values, dim=0).item())
 
-            # Construct candidate graphs and prepare for batch processing.
-            candidate_state_list: List[bs.IABRelayGraph] = []
-            for predecessors in self.predecessors_list:
-                path = astar.get_shortest_path(predecessors, target_user.get_id())
-                candidate_state = self.get_aborescence_graph(state, path)
-                candidate_state_list.append(candidate_state)
+        best_state = candidate_state_list[best_index]
+        return best_state, {
+            "target_user_id": target_user.get_id(),
+            "candidate_state_list": candidate_state_list,
+            "candidate_eval_targets": candidate_eval_targets,
+            "candidate_min_throughputs": candidate_min_throughputs,
+            "selected_index": best_index,
+            "expert_index": expert_index,
+            "selection_mode": "policy",
+        }
 
-            if self.deterministic:
-                throughput_list = [
-                    s.compute_network_throughput() for s in candidate_state_list
-                ]
-                best_index = np.argmax(throughput_list)
+    def _build_candidate_states(
+        self, state: bs.IABRelayGraph, target_user: bs.User
+    ) -> tuple[List[bs.IABRelayGraph], List[List[int]], List[float], int | None]:
+        candidate_state_list: List[bs.IABRelayGraph] = []
+        candidate_eval_targets: List[List[int]] = []
+        candidate_min_throughputs: List[float] = []
+        seen_edge_sets = set()
+        expert_index = None
+
+        cached_paths = self.candidate_path_cache.get(target_user.get_id(), [])
+        for candidate_state, eval_targets, value, edge_signature in self._evaluate_candidates(
+            state, cached_paths
+        ):
+            if edge_signature in seen_edge_sets:
+                continue
+            seen_edge_sets.add(edge_signature)
+            candidate_state_list.append(candidate_state)
+            candidate_eval_targets.append(eval_targets)
+            candidate_min_throughputs.append(value)
+
+        expert_path = self.expert_path_cache.get(target_user.get_id())
+        if expert_path is not None:
+            expert_candidate, eval_targets, value, edge_signature = self._evaluate_one_candidate(
+                state, expert_path
+            )
+            if edge_signature not in seen_edge_sets:
+                expert_index = len(candidate_state_list)
+                candidate_state_list.append(expert_candidate)
+                candidate_eval_targets.append(eval_targets)
+                candidate_min_throughputs.append(value)
             else:
-                candidate_data_list = [
-                    self._convert_state_to_data(s) for s in candidate_state_list
-                ]
-                candidate_batch = Batch.from_data_list(candidate_data_list).to(  # type: ignore
-                    self.device
-                )
-                # Evaluate Q values for each candidate graph using the local Q-network.
-                self.local_q_network.eval()
-                with torch.no_grad():
-                    q_values = self.local_q_network(candidate_batch)
-                self.local_q_network.train()
+                for idx, candidate in enumerate(candidate_state_list):
+                    if self._edge_signature(candidate) == edge_signature:
+                        expert_index = idx
+                        break
 
-                # Choose the candidate with the highest Q value.
-                best_index = int(torch.argmax(q_values, dim=0).item())
+        return (
+            candidate_state_list,
+            candidate_eval_targets,
+            candidate_min_throughputs,
+            expert_index,
+        )
 
-            best_state = candidate_state_list[best_index]
-            return best_state
+    def _build_candidate_path_cache(self) -> Dict[int, List[List[int]]]:
+        if self.master_graph is None:
+            return {}
+
+        all_paths = utils.get_all_shortest_paths(self.master_graph, self.predecessors_list)
+        deduped: Dict[int, List[List[int]]] = {}
+        for user_id, path_list in all_paths.items():
+            unique_paths = []
+            seen = set()
+            for path in path_list:
+                path_key = tuple(path)
+                if path_key in seen:
+                    continue
+                seen.add(path_key)
+                unique_paths.append(path)
+            deduped[user_id] = unique_paths
+        return deduped
+
+    def _build_expert_path_cache(self) -> Dict[int, List[int]]:
+        if self.expert_graph is None:
+            return {}
+
+        expert_paths: Dict[int, List[int]] = {}
+        for user in self.expert_graph.users:
+            if not user.has_parent():
+                continue
+            current_node = self.expert_graph.nodes[user.get_id()]
+            visited = set()
+            path = [user.get_id()]
+            while current_node.has_parent():
+                if current_node.get_id() in visited:
+                    path = []
+                    break
+                visited.add(current_node.get_id())
+                parent = current_node.get_parent()[0]
+                path.append(parent.get_id())
+                current_node = parent
+            if path:
+                path.reverse()
+                expert_paths[user.get_id()] = path
+        return expert_paths
+
+    def _evaluate_one_candidate(self, state: bs.IABRelayGraph, path: List[int]):
+        candidate_state = self.get_aborescence_graph(state, list(path))
+        edge_signature = self._edge_signature(candidate_state)
+        eval_targets = _candidate_eval_targets_from_path(candidate_state, path)
+        if eval_targets:
+            value = float(candidate_state.compute_network_throughput(eval_targets))
+            if not np.isfinite(value):
+                value = float(candidate_state.compute_network_throughput())
+        else:
+            value = float(candidate_state.compute_network_throughput())
+        if not np.isfinite(value):
+            value = 0.0
+        return candidate_state, eval_targets, value, edge_signature
+
+    def _get_candidate_pool(self):
+        if self.num_candidate_workers <= 1:
+            return None
+        if self._candidate_pool is None:
+            ctx = mp.get_context("spawn")
+            self._candidate_pool = ctx.Pool(processes=self.num_candidate_workers)
+        return self._candidate_pool
+
+    def _evaluate_candidates(self, state: bs.IABRelayGraph, paths: List[List[int]]):
+        pool = self._get_candidate_pool()
+        if pool is None:
+            return [self._evaluate_one_candidate(state, path) for path in paths]
+        payloads = [(state, path) for path in paths]
+        return pool.map(_evaluate_candidate_worker, payloads)
+
+    def close(self):
+        if self._candidate_pool is not None:
+            self._candidate_pool.close()
+            self._candidate_pool.join()
+            self._candidate_pool = None
+
+    def _edge_signature(self, graph: bs.IABRelayGraph):
+        return tuple(
+            sorted(
+                (from_node_id, to_node_id)
+                for from_node_id, neighbors in graph.adjacency_list.items()
+                for to_node_id in neighbors
+            )
+        )
 
     def learn(self, experiences):
         """
@@ -265,18 +464,7 @@ class Agent:
         - path [List[int]]: the path to be added
         """
         aborescence_graph = state.copy()
-        child = path.pop()
-        while path:
-            child_parent = state.nodes[child].get_parent()
-            if len(child_parent) == 0:
-                parent = path.pop()
-                aborescence_graph.add_edge(parent, child)
-            elif len(child_parent) == 1:
-                break
-            else:
-                raise ValueError("Multiple parents detected.")
-            child = parent
-
+        utils.get_aborescence_graph(aborescence_graph, list(path))
         return aborescence_graph
 
     def _convert_state_to_data(self, state: bs.IABRelayGraph):
@@ -294,9 +482,15 @@ class Agent:
             else:
                 hop_list.append(0)
         hop_list = torch.tensor(hop_list).view(-1, 1).float()
+        tau_value = getattr(
+            state.environmental_variables,
+            "SPSC_probability",
+            bs.environmental_variables.SPSC_probability,
+        )
+        tau_list = torch.full((len(state.nodes), 1), float(tau_value)).float()
         # append hop_list to Data.x
         state_data = state.to_torch_geometric()
-        state_data.x = torch.cat((state_data.x, hop_list), dim=1)
+        state_data.x = torch.cat((state_data.x, hop_list, tau_list), dim=1)
         reversed_edge_index = state_data.edge_index.flip(0)
         state_data.edge_index = reversed_edge_index
 
