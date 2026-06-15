@@ -43,3 +43,22 @@ build/
 **/__pycache__*/
 *.eps
 *tmp*
+
+# Local paper repository / manuscript artifacts
+/LATEX-SSIR/
+
+# Experiment outputs. Keep top-level revision scripts visible.
+/revision/**
+!/revision/
+!/revision/*.py
+
+# Generated figures, rendered media, and local model checkpoints
+/scripts/graphs/*.pdf
+/scripts/map/mp4_frames/
+/scripts/map/*.mp4
+/scripts/results_mmf_vs_*
+/scripts/results_mmf_vs_*/
+*.pt
+*.pth
+*.ckpt
+*.pkl
