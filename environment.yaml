@@ -1,4 +1,4 @@
-name: SSIR
+name: ssir
 channels:
   - conda-forge
   - defaults
