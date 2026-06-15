@@ -28,6 +28,20 @@ class EnvironmentalVariables:
 environmental_variables = EnvironmentalVariables()
 
 
+def _bs_type_to_id(node):
+    if not isinstance(node, BaseStation):
+        return -1
+    if node.basestation_type.name == BaseStationType.MARITIME.name:
+        return 0
+    if node.basestation_type.name == BaseStationType.GROUND.name:
+        return 1
+    if node.basestation_type.name == BaseStationType.HAPS.name:
+        return 2
+    if node.basestation_type.name == BaseStationType.LEO.name:
+        return 3
+    raise ValueError(f"Unknown basestation type: {node.basestation_type.name}")
+
+
 def dB_to_linear(dB: float) -> float:
     return 10 ** (dB / 10)
 
@@ -299,6 +313,7 @@ class BaseStation(AbstractNode):
             else:
                 raise ValueError("Unsupported node type.")
             if spectral_efficiency == 0:
+                return 0
                 print(
                     f"{self}, {node}, {self.jamming_power_density}, {self.transmission_power_density} : SNR: {snr}, Spectral Efficiency: {spectral_efficiency}"
                 )
@@ -707,9 +722,9 @@ class IABRelayGraph:
             if current_node.has_parent():
                 user.hops += 1
                 parent_nodes: list[AbstractNode] = current_node.get_parent()
-                assert (
-                    len(parent_nodes) == 1
-                ), f"There are more than one parent node. Current node: {current_node} Parent node: {parent_nodes}"
+                assert len(parent_nodes) == 1, (
+                    f"There are more than one parent node. Current node: {current_node} Parent node: {parent_nodes}"
+                )
                 current_node = parent_nodes[0]
                 current_node.connected_user.append(user)
             else:
@@ -749,9 +764,9 @@ class IABRelayGraph:
             raise ValueError(f"Node {node_id} does not exist in the graph.")
 
         from_node = self.nodes[node_id]
-        assert isinstance(
-            from_node, BaseStation
-        ), f"Node {node_id} is not a base station."
+        assert isinstance(from_node, BaseStation), (
+            f"Node {node_id} is not a base station."
+        )
 
         maximum_link_distance = from_node.compute_maximum_link_distance()
         maximum_link_distance_los = from_node.compute_maximum_link_distance(is_los=True)
@@ -1003,84 +1018,178 @@ class IABRelayGraph:
 
         return graph
 
-    def to_torch_geometric(self):
+    def to_torch_geometric(self, score_nodes: list[int] | None = None):
         """
-        Convert the graph to a torch_geometric.data.Data object.
-        Assumes that node_id increases sequentially from 0.
-        """
-        node_features = []
-        for node_id, node in self.nodes.items():
-            # Initialize an empty feature array
-            feature = np.empty(0, dtype=np.float32)
+        Export one active tree/arborescence as a PyG Data object.
 
-            # Append the node id
-            feature = np.append(feature, node_id)
-            # Append the node type to the feature
-            if node_id == 0:
-                feature = np.append(feature, 0)
+        Intended for exact throughput evaluation on GPU.
+
+        Edge direction:
+            child -> parent
+
+        Node feature x layout:
+            [0] is_source
+            [1] is_user
+            [2] is_basestation
+            [3] pos0
+            [4] pos1
+            [5] pos2
+
+        Extra node tensors:
+            bs_type_id
+            power_capacity_dbm
+            minimum_transit_power_ratio
+            carrier_frequency_ghz
+            bandwidth_mhz
+            tx_gain_dbi
+            rx_gain_dbi
+            g_over_t_db
+            pathloss_exponent
+            eavesdropper_density
+            maximum_link_distance_km
+            subtree_hop_load
+            score_mask
+
+        Edge tensors:
+            edge_distance_km
+        """
+        self.compute_hops()
+
+        if score_nodes is None:
+            score_nodes = []
+
+        node_ids = sorted(self.nodes.keys())
+        node_id_to_idx = {nid: i for i, nid in enumerate(node_ids)}
+
+        x = []
+        node_type = []  # 0=source, 1=user, 2=bs
+        bs_type_id = []
+
+        power_capacity_dbm = []
+        minimum_transit_power_ratio = []
+        carrier_frequency_ghz = []
+        bandwidth_mhz = []
+        tx_gain_dbi = []
+        rx_gain_dbi = []
+        g_over_t_db = []
+        pathloss_exponent = []
+        eavesdropper_density = []
+        maximum_link_distance_km = []
+
+        subtree_hop_load = []
+        score_mask = []
+
+        for nid in node_ids:
+            node = self.nodes[nid]
+            pos = node.get_position()
+
+            is_source = float(nid == 0)
+            is_user = float(isinstance(node, User))
+            is_bs = float(isinstance(node, BaseStation))
+
+            x.append(
+                [
+                    is_source,
+                    is_user,
+                    is_bs,
+                    float(pos[0]),
+                    float(pos[1]),
+                    float(pos[2]),
+                ]
+            )
+
+            if nid == 0:
+                node_type.append(0)
             elif isinstance(node, User):
-                feature = np.append(feature, 1)
-            else:  # BaseStation
-                feature = np.append(feature, 2)
+                node_type.append(1)
+            else:
+                node_type.append(2)
 
-            # Append the node position to the feature
-            feature = np.concatenate((feature, node.get_position()))
-            # Append additional attributes based on the node type
-            if isinstance(node, User):
-                configs = {
-                    "power_capacity": 0.0,
-                    "minimum_transit_power_ratio": 0.0,
-                    "carrier_frequency": 0.0,
-                    "bandwidth": 0.0,
-                    "transmit_antenna_gain": 0.0,
-                    "receive_antenna_gain": 0.0,
-                    "antenna_gain_to_noise_temperature": 0.0,
-                    "pathloss_exponent": 0.0,
-                    "eavesdropper_density": 0.0,
-                }
-                feature = np.concatenate((feature, np.array(list(configs.values()))))
-            elif isinstance(node, BaseStation):
-                feature = np.concatenate(
-                    (
-                        feature,
-                        np.array(list(vars(node.basestation_type.config).values())),
-                    )
+            bs_type_id.append(_bs_type_to_id(node))
+
+            if isinstance(node, BaseStation):
+                cfg = node.basestation_type.config
+                power_capacity_dbm.append(float(cfg.power_capacity))
+                minimum_transit_power_ratio.append(
+                    float(cfg.minimum_transit_power_ratio)
                 )
-            node_features.append(feature)
+                carrier_frequency_ghz.append(float(cfg.carrier_frequency))
+                bandwidth_mhz.append(float(cfg.bandwidth))
+                tx_gain_dbi.append(float(cfg.transmit_antenna_gain))
+                rx_gain_dbi.append(float(cfg.receive_antenna_gain))
+                g_over_t_db.append(float(cfg.antenna_gain_to_noise_temperature))
+                pathloss_exponent.append(float(cfg.pathloss_exponent))
+                eavesdropper_density.append(float(cfg.eavesdropper_density))
+                maximum_link_distance_km.append(float(cfg.maximum_link_distance))
 
-        # Create lists for edge indices and edge features
+                load = float(sum(user.hops for user in node.connected_user))
+                subtree_hop_load.append(load)
+            else:
+                power_capacity_dbm.append(0.0)
+                minimum_transit_power_ratio.append(0.0)
+                carrier_frequency_ghz.append(0.0)
+                bandwidth_mhz.append(0.0)
+                tx_gain_dbi.append(0.0)
+                rx_gain_dbi.append(0.0)
+                g_over_t_db.append(0.0)
+                pathloss_exponent.append(0.0)
+                eavesdropper_density.append(0.0)
+                maximum_link_distance_km.append(0.0)
+
+                subtree_hop_load.append(float(node.hops))
+
+            score_mask.append(bool(nid in score_nodes))
+
         edge_index = []
-        edge_features = []
-        for from_node_id, neighbors in self.adjacency_list.items():
-            for to_node_id in neighbors:
-                from_node = self.nodes[from_node_id]
-                to_node = self.nodes[to_node_id]
-                # Compute the distance between nodes
-                distance = from_node.get_distance(to_node)
-                # Compute additional edge features based on the type of the from_node
-                if isinstance(from_node, BaseStation):
-                    from_node._set_transmission_and_jamming_power_density()
-                    snr = from_node._compute_snr(to_node)
-                    spectral_efficiency = np.log2(1 + snr)
-                    edge_feat = np.array(
-                        [distance, snr, spectral_efficiency], dtype=np.float32
-                    )
-                else:  # User
-                    edge_feat = np.array([distance, 0.0, 0.0], dtype=np.float32)
-                # Append edge index using the original node_id
-                edge_index.append([from_node_id, to_node_id])
-                edge_features.append(edge_feat)
+        edge_distance_km = []
 
-        # Convert lists to torch tensors
-        x = torch.tensor(np.stack(node_features), dtype=torch.float)
-        edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
-        if edge_features:
-            edge_attr = torch.tensor(np.stack(edge_features), dtype=torch.float)
+        # export as child -> parent
+        for parent_id, children in self.adjacency_list.items():
+            parent = self.nodes[parent_id]
+            for child_id in children:
+                child = self.nodes[child_id]
+                edge_index.append([node_id_to_idx[child_id], node_id_to_idx[parent_id]])
+                edge_distance_km.append(float(parent.get_distance(child)))
+
+        if edge_index:
+            edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
+            edge_distance_km = torch.tensor(edge_distance_km, dtype=torch.float)
         else:
-            edge_attr = torch.tensor([], dtype=torch.float)
+            edge_index = torch.empty((2, 0), dtype=torch.long)
+            edge_distance_km = torch.empty((0,), dtype=torch.float)
 
-        # Create and return the torch_geometric.data.Data object
-        data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+        data = Data(
+            x=torch.tensor(x, dtype=torch.float),
+            edge_index=edge_index,
+        )
+
+        data.node_ids = torch.tensor(node_ids, dtype=torch.long)
+        data.node_type = torch.tensor(node_type, dtype=torch.long)
+        data.bs_type_id = torch.tensor(bs_type_id, dtype=torch.long)
+
+        data.power_capacity_dbm = torch.tensor(power_capacity_dbm, dtype=torch.float)
+        data.minimum_transit_power_ratio = torch.tensor(
+            minimum_transit_power_ratio, dtype=torch.float
+        )
+        data.carrier_frequency_ghz = torch.tensor(
+            carrier_frequency_ghz, dtype=torch.float
+        )
+        data.bandwidth_mhz = torch.tensor(bandwidth_mhz, dtype=torch.float)
+        data.tx_gain_dbi = torch.tensor(tx_gain_dbi, dtype=torch.float)
+        data.rx_gain_dbi = torch.tensor(rx_gain_dbi, dtype=torch.float)
+        data.g_over_t_db = torch.tensor(g_over_t_db, dtype=torch.float)
+        data.pathloss_exponent = torch.tensor(pathloss_exponent, dtype=torch.float)
+        data.eavesdropper_density = torch.tensor(
+            eavesdropper_density, dtype=torch.float
+        )
+        data.maximum_link_distance_km = torch.tensor(
+            maximum_link_distance_km, dtype=torch.float
+        )
+
+        data.subtree_hop_load = torch.tensor(subtree_hop_load, dtype=torch.float)
+        data.score_mask = torch.tensor(score_mask, dtype=torch.bool)
+        data.edge_distance_km = edge_distance_km
+
         return data
 
     def from_networkx(self, graph: nx.DiGraph):
